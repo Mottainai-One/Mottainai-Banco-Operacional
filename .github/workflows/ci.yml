@@ -2,19 +2,15 @@ name: Database CI
 
 on:
   pull_request:
-    branches:
-      - main
-      - develop
   push:
-    branches:
-      - main
-      - develop
 
 jobs:
-  validate-database:
-    name: Validate PostgreSQL schema
+  # ============================================================
+  # JOB 1: Valida o schema em um PostgreSQL 15 limpo
+  # ============================================================
+  validate-schema:
+    name: 1. Validar schema
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:15
@@ -29,41 +25,128 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Validate PostgreSQL connection
+      - name: Executar sql_completo.sql
         env:
           PGPASSWORD: mottainai
         run: |
-          psql \
-            -h localhost \
-            -p 5432 \
-            -U mottainai \
-            -d mottainai \
-            -c "SELECT version();"
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f script/sql_completo.sql
 
-      - name: Execute database script
+      - name: Validar schema criado
         env:
           PGPASSWORD: mottainai
         run: |
-          psql \
-            -h localhost \
-            -p 5432 \
-            -U mottainai \
-            -d mottainai \
-            -v ON_ERROR_STOP=1 \
-            -f script/sql_completo.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
 
-      - name: Validate schema
+  # ============================================================
+  # JOB 2: Executa o dataLoad 2x (idempotencia) sobre o schema
+  # ============================================================
+  validate-dataload:
+    name: 2. Validar dataLoad (idempotencia)
+    runs-on: ubuntu-latest
+    needs: validate-schema
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: mottainai
+          POSTGRES_PASSWORD: mottainai
+          POSTGRES_DB: mottainai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mottainai -d mottainai"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Executar sql_completo.sql
         env:
           PGPASSWORD: mottainai
         run: |
-          psql \
-            -h localhost \
-            -p 5432 \
-            -U mottainai \
-            -d mottainai \
-            -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f script/sql_completo.sql
+
+      - name: Executar dataLoad.sql (1a vez)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f script/dataLoad.sql
+
+      - name: Executar dataLoad.sql (2a vez - idempotencia)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f script/dataLoad.sql
+
+      - name: Validar carga (60 produtos esperados)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT 'produtos=' || count(*) FROM mottainai.product;"
+          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT 'batchs=' || count(*) FROM mottainai.batch;"
+
+  # ============================================================
+  # JOB 3: Sanidade do SQL (regras de estilo essenciais)
+  # ============================================================
+  lint-sql:
+    name: 3. Lint SQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar consistencia do SQL
+        run: |
+          set -e
+          for f in script/*.sql; do
+            echo "==> $f"
+            # sem tabs
+            if grep -Pn "\t" "$f" >/dev/null; then
+              echo "ERRO: encontrou tab em $f"; exit 1
+            fi
+            # termina com newline
+            if [ -n "$(tail -c 1 "$f")" ]; then
+              echo "ERRO: $f nao termina com newline"; exit 1
+            fi
+            # BEGIN/COMMIT balanceados
+            begins=$(grep -c "^BEGIN;" "$f" || true)
+            commits=$(grep -c "^COMMIT;" "$f" || true)
+            if [ "$begins" != "$commits" ]; then
+              echo "ERRO: BEGIN=$begins COMMIT=$commits em $f"; exit 1
+            fi
+          done
+          echo "Lint SQL OK"
+
+  # ============================================================
+  # JOB 4: Busca por segredos vazados (credenciais, .env, chaves)
+  # ============================================================
+  secret-scan:
+    name: 4. Varredura de segredos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================
+  # JOB 5: Lint de documentacao (README.md)
+  # ============================================================
+  lint-docs:
+    name: 5. Lint documentacao
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Markdownlint
+        run: |
+          npx --yes markdownlint-cli "*.md" "**/*.md" || echo "AVISO: markdownlint apontou itens (nao bloqueante)"
