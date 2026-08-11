@@ -10,8 +10,8 @@
 -- ====================================================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "btree_gin";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS btree_gin;
 
 -- ====================================================================
 -- 01_SCHEMA.SQL
@@ -1808,7 +1808,7 @@ GROUP BY p.product_id, p.name, s.store_id, s.name;
 
 CREATE OR REPLACE VIEW vw_monthly_summary AS
 SELECT 
-    DATE_TRUNC('month', sale_date) AS month,
+    DATE_TRUNC('month', sale_date) AS sale_month,
     store_id,
     COUNT(*) AS total_sales,
     SUM(total_amount) AS total_revenue,
@@ -1829,7 +1829,7 @@ WITH stats AS (
         s.store_id,
         COUNT(DISTINCT a.alert_id) AS alerts,
         COUNT(DISTINCT i.inventory_id) AS ruptures,
-        COUNT(DISTINCT st.sale_id) AS transactions,
+        COUNT(DISTINCT st.sale_id) AS sale_count,
         COALESCE(SUM(st.total_amount), 0) AS revenue,
         COALESCE(AVG(st.total_amount), 0) AS avg_ticket
     FROM retail_store s
@@ -1844,19 +1844,20 @@ WITH stats AS (
       AND s.deleted_at IS NULL
     GROUP BY s.store_id
 )
+
 SELECT 
     store_id,
-    (SELECT name FROM retail_store WHERE store_id = stats.store_id) AS store_name,
+    (SELECT r.name FROM retail_store r WHERE r.store_id = stats.store_id) AS store_name,
     alerts AS active_alerts,
     ruptures AS products_in_rupture,
     revenue AS daily_revenue,
     avg_ticket,
-    transactions AS daily_transactions,
-    (SELECT COUNT(DISTINCT product_id) FROM sale_item si 
-     JOIN sales_transaction st ON st.sale_id = si.sale_id 
-     WHERE st.store_id = stats.store_id 
-       AND st.sale_date >= CURRENT_DATE - INTERVAL '1 day'
-       AND st.deleted_at IS NULL) AS products_sold,
+    sale_count AS daily_transactions,
+    (SELECT COUNT(DISTINCT si.product_id) FROM sale_item si 
+     JOIN sales_transaction st2 ON st2.sale_id = si.sale_id 
+     WHERE st2.store_id = stats.store_id 
+       AND st2.sale_date >= CURRENT_DATE - INTERVAL '1 day'
+       AND st2.deleted_at IS NULL) AS products_sold,
     fn_calculate_economy(store_id, DATE_TRUNC('month', CURRENT_DATE)::DATE, CURRENT_DATE) AS monthly_economy
 FROM stats;
 

@@ -1,0 +1,6 @@
+# Configuracao do sqlfluff para o projeto Mottainai-Banco-Operacional
+[sqlfluff]
+dialect = postgres
+large_file_skip_byte_limit = 0
+# Regras de ruido excluidas (codigo legado; nao bloqueantes)
+exclude_rules = layout.spacing,layout.indent,layout.operators,layout.long_lines,layout.select_targets,capitalisation.functions,capitalisation.types,capitalisation.identifiers,capitalisation.literals,aliasing.table,aliasing.expression,ambiguous.join,references.consistent,structure.column_order,structure.join_condition_order

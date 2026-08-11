@@ -151,3 +151,82 @@ jobs:
       - name: Markdownlint
         run: |
           npx --yes markdownlint-cli "*.md" "**/*.md" || echo "AVISO: markdownlint apontou itens (nao bloqueante)"
+
+  # ============================================================
+  # JOB 6: Verifica que o .env nunca foi commitado
+  # ============================================================
+  check-env:
+    name: 6. Check .env
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar .env no historico
+        run: |
+          set -e
+          # 1) .env nao pode existir na arvore atual
+          if find . -name ".env" -not -path "./node_modules/*" -not -path "./.git/*" | grep -q .; then
+            echo "ERRO: arquivo .env presente no repo"; exit 1
+          fi
+          # 2) .env nao pode estar no historico git
+          if git log --all --oneline -- .env | grep -q .; then
+            echo "ERRO: .env ja foi commitado no historico"; exit 1
+          fi
+          # 3) .env deve estar no .gitignore
+          if ! grep -qE "^\.env" .gitignore 2>/dev/null; then
+            echo "AVISO: .env nao esta no .gitignore"
+          fi
+          echo "Check .env OK"
+
+  # ============================================================
+  # JOB 7: Padrao SQL (sqlfluff) - obrigatorio
+  # ============================================================
+  lint-padrao:
+    name: 7. Padrao SQL (sqlfluff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar sqlfluff
+        run: pip install --quiet sqlfluff==3.2.5
+
+      - name: Lint SQL (padrao obrigatorio)
+        run: |
+          sqlfluff lint script/sql_completo.sql script/dataLoad.sql
+
+  # ============================================================
+  # JOB 8: Boas praticas SQL (sqlfluff completo) - NAO obrigatorio
+  # continue-on-error: nao bloqueia o merge
+  # ============================================================
+  lint-boas-praticas:
+    name: 8. Boas praticas SQL (nao bloqueante)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar sqlfluff
+        run: pip install --quiet sqlfluff==3.2.5
+
+      - name: Lint SQL completo (todas as regras, informativo)
+        run: |
+          cat > /tmp/sqlfluff-full.ini <<'EOF'
+          [sqlfluff]
+          dialect = postgres
+          large_file_skip_byte_limit = 0
+          EOF
+          sqlfluff lint script/sql_completo.sql script/dataLoad.sql \
+            --config /tmp/sqlfluff-full.ini --ignore parsing || true
+          echo "Job informativo - nao bloqueia o merge"
