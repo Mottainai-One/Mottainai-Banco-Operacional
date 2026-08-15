@@ -995,12 +995,12 @@ CREATE OR REPLACE VIEW mottainai_analytics.vw_store_performance AS
 WITH sales AS (
     SELECT
         store_id,
-        COUNT(DISTINCT (sale_id, sale_date)) AS sales_count,
-        SUM(total_amount) AS revenue,
-        AVG(total_amount) AS avg_ticket
-    FROM mottainai.sales_transaction
-    WHERE status = 'COMPLETED' AND deleted_at IS NULL
-    GROUP BY store_id
+        COUNT(DISTINCT (st.sale_id, st.sale_date)) AS sales_count,
+        SUM(st.total_amount) AS revenue,
+        AVG(st.total_amount) AS avg_ticket
+    FROM mottainai.sales_transaction st
+    WHERE st.status = 'COMPLETED' AND st.deleted_at IS NULL
+    GROUP BY st.store_id
 ), stock AS (
     SELECT
         i.store_id,
@@ -1063,9 +1063,9 @@ CREATE OR REPLACE VIEW mottainai_analytics.vw_executive_dashboard AS
 WITH sales_30d AS (
     SELECT
         store_id,
-        COUNT(DISTINCT (sale_id, sale_date)) AS sales_count,
-        SUM(total_amount) AS revenue,
-        AVG(total_amount) AS avg_ticket,
+        COUNT(DISTINCT (st.sale_id, st.sale_date)) AS sales_count,
+        SUM(st.total_amount) AS revenue,
+        AVG(st.total_amount) AS avg_ticket,
         SUM(si.quantity_sold) AS units_sold
     FROM mottainai.sales_transaction st
     LEFT JOIN mottainai.sale_item si
