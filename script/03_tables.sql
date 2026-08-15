@@ -662,6 +662,33 @@ CREATE TABLE IF NOT EXISTS pos_cancel_request (
     CHECK (executed_at IS NULL OR decided_at IS NOT NULL)
 );
 
+CREATE TABLE IF NOT EXISTS alert (
+    alert_id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    store_id        INTEGER NOT NULL REFERENCES retail_store(store_id) ON DELETE RESTRICT,
+    title           VARCHAR(120) NOT NULL,
+    description     TEXT,
+    alert_type      alert_type NOT NULL,
+    priority        priority_level NOT NULL DEFAULT 'MEDIUM',
+    status          alert_status NOT NULL DEFAULT 'ACTIVE',
+    generated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    resolved_at     TIMESTAMP,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    CHECK (resolved_at IS NULL OR resolved_at >= generated_at)
+);
+
+CREATE TABLE IF NOT EXISTS suggested_action (
+    suggested_action_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    alert_id        INTEGER NOT NULL REFERENCES alert(alert_id) ON DELETE RESTRICT,
+    action_type     suggested_action_type NOT NULL,
+    description     TEXT,
+    priority        priority_level NOT NULL DEFAULT 'MEDIUM',
+    status          suggested_action_status NOT NULL DEFAULT 'PENDING',
+    generated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS promotion (
     promotion_id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     store_id             INTEGER NOT NULL REFERENCES retail_store(store_id) ON DELETE RESTRICT,
@@ -754,33 +781,6 @@ CREATE TABLE IF NOT EXISTS loyalty_redemption (
     status               VARCHAR(20) NOT NULL DEFAULT 'CONFIRMED'
                          CHECK (status IN ('PENDING','CONFIRMED','CANCELED')),
     UNIQUE (loyalty_account_id, reward_id, redeemed_at)
-);
-
-CREATE TABLE IF NOT EXISTS alert (
-    alert_id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    store_id        INTEGER NOT NULL REFERENCES retail_store(store_id) ON DELETE RESTRICT,
-    title           VARCHAR(120) NOT NULL,
-    description     TEXT,
-    alert_type      alert_type NOT NULL,
-    priority        priority_level NOT NULL DEFAULT 'MEDIUM',
-    status          alert_status NOT NULL DEFAULT 'ACTIVE',
-    generated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
-    resolved_at     TIMESTAMP,
-    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
-    CHECK (resolved_at IS NULL OR resolved_at >= generated_at)
-);
-
-CREATE TABLE IF NOT EXISTS suggested_action (
-    suggested_action_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    alert_id        INTEGER NOT NULL REFERENCES alert(alert_id) ON DELETE RESTRICT,
-    action_type     suggested_action_type NOT NULL,
-    description     TEXT,
-    priority        priority_level NOT NULL DEFAULT 'MEDIUM',
-    status          suggested_action_status NOT NULL DEFAULT 'PENDING',
-    generated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
-    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 -- 13_TRANSFERS_DONATIONS_DISPOSALS.SQL
