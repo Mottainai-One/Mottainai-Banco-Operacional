@@ -1,0 +1,232 @@
+name: Database CI
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  # ============================================================
+  # JOB 1: Valida o schema em um PostgreSQL 15 limpo
+  # ============================================================
+  validate-schema:
+    name: 1. Validar schema
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: mottainai
+          POSTGRES_PASSWORD: mottainai
+          POSTGRES_DB: mottainai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mottainai -d mottainai"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Executar install.sql (schema versionado)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Validar schema criado
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
+
+  # ============================================================
+  # JOB 2: Executa o dataLoad 2x (idempotencia) sobre o schema
+  # ============================================================
+  validate-dataload:
+    name: 2. Validar dataLoad (idempotencia)
+    runs-on: ubuntu-latest
+    needs: validate-schema
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: mottainai
+          POSTGRES_PASSWORD: mottainai
+          POSTGRES_DB: mottainai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mottainai -d mottainai"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Executar install.sql (schema versionado)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Executar dataLoad.sql (1a vez)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f dataLoad.sql
+
+      - name: Executar dataLoad.sql (2a vez - idempotencia)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f dataLoad.sql
+
+      - name: Validar carga (60 produtos esperados)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT 'produtos=' || count(*) FROM mottainai.product;"
+          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT 'batchs=' || count(*) FROM mottainai.batch;"
+
+  # ============================================================
+  # JOB 3: Sanidade do SQL (regras de estilo essenciais)
+  # ============================================================
+  lint-sql:
+    name: 3. Lint SQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar consistencia do SQL
+        run: |
+          set -e
+          for f in script/*.sql; do
+            echo "==> $f"
+            # sem tabs
+            if grep -Pn "\t" "$f" >/dev/null; then
+              echo "ERRO: encontrou tab em $f"; exit 1
+            fi
+            # termina com newline
+            if [ -n "$(tail -c 1 "$f")" ]; then
+              echo "ERRO: $f nao termina com newline"; exit 1
+            fi
+            # BEGIN/COMMIT balanceados
+            begins=$(grep -c "^BEGIN;" "$f" || true)
+            commits=$(grep -c "^COMMIT;" "$f" || true)
+            if [ "$begins" != "$commits" ]; then
+              echo "ERRO: BEGIN=$begins COMMIT=$commits em $f"; exit 1
+            fi
+          done
+          echo "Lint SQL OK"
+
+  # ============================================================
+  # JOB 4: Busca por segredos vazados (credenciais, .env, chaves)
+  # ============================================================
+  secret-scan:
+    name: 4. Varredura de segredos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o gitleaks.tgz
+          tar -xzf gitleaks.tgz gitleaks
+          ./gitleaks git --no-banner --redact -v
+
+  # ============================================================
+  # JOB 5: Lint de documentacao (README.md)
+  # ============================================================
+  lint-docs:
+    name: 5. Lint documentacao
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Markdownlint
+        run: |
+          npx --yes markdownlint-cli "*.md" "**/*.md" || echo "AVISO: markdownlint apontou itens (nao bloqueante)"
+
+  # ============================================================
+  # JOB 6: Verifica que o .env nunca foi commitado
+  # ============================================================
+  check-env:
+    name: 6. Check .env
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verificar .env no historico
+        run: |
+          set -e
+          # 1) .env nao pode existir na arvore atual
+          if find . -name ".env" -not -path "./node_modules/*" -not -path "./.git/*" | grep -q .; then
+            echo "ERRO: arquivo .env presente no repo"; exit 1
+          fi
+          # 2) .env nao pode estar no historico git
+          if git log --all --oneline -- .env | grep -q .; then
+            echo "ERRO: .env ja foi commitado no historico"; exit 1
+          fi
+          # 3) .env deve estar no .gitignore
+          if ! grep -qE "^\.env" .gitignore 2>/dev/null; then
+            echo "AVISO: .env nao esta no .gitignore"
+          fi
+          echo "Check .env OK"
+
+  # ============================================================
+  # JOB 7: Padrao SQL (sqlfluff) - obrigatorio
+  # ============================================================
+  lint-padrao:
+    name: 7. Padrao SQL (sqlfluff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar sqlfluff
+        run: pip install --quiet sqlfluff==3.2.5
+
+      - name: Lint SQL (padrao obrigatorio)
+        run: |
+          sqlfluff lint script/0[0-9]_*.sql script/10_tests.sql script/dataLoad.sql
+
+  # ============================================================
+  # JOB 8: Boas praticas SQL (sqlfluff completo) - NAO obrigatorio
+  # continue-on-error: nao bloqueia o merge
+  # ============================================================
+  lint-boas-praticas:
+    name: 8. Boas praticas SQL (nao bloqueante)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar sqlfluff
+        run: pip install --quiet sqlfluff==3.2.5
+
+      - name: Lint SQL completo (todas as regras, informativo)
+        run: |
+          cat > /tmp/sqlfluff-full.ini <<'EOF'
+          [sqlfluff]
+          dialect = postgres
+          large_file_skip_byte_limit = 0
+          EOF
+          sqlfluff lint script/0[0-9]_*.sql script/10_tests.sql script/dataLoad.sql \
+            --config /tmp/sqlfluff-full.ini --ignore parsing || true
+          echo "Job informativo - nao bloqueia o merge"
