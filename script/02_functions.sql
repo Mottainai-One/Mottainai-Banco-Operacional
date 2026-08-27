@@ -269,25 +269,32 @@ CREATE OR REPLACE FUNCTION fn_calculate_average_consumption(
     p_days INTEGER DEFAULT 30
 ) RETURNS DECIMAL(10,3) AS $$
 DECLARE
-    v_total_output DECIMAL(12,3);
+    v_median_consumption DECIMAL(10,3);
 BEGIN
-    SELECT COALESCE(SUM(ABS(im.moved_quantity)), 0)
-    INTO v_total_output
-    FROM inventory_movement im
-    JOIN inventory i ON i.inventory_id = im.inventory_id
-    JOIN batch b ON b.batch_id = i.batch_id
-    WHERE b.product_id = p_product_id
-      AND i.store_id = p_store_id
-      AND im.movement_type = 'OUT'
-      AND im.movement_date >= NOW() - (p_days || ' days')::INTERVAL
-      AND i.deleted_at IS NULL
-      AND b.deleted_at IS NULL;
-    
-    IF p_days <= 0 OR v_total_output = 0 THEN
+    IF p_days <= 0 THEN
         RETURN 0;
     END IF;
-    
-    RETURN ROUND(v_total_output / p_days, 3);
+
+    -- Usa a MEDIANA do consumo diario (robusto a outliers, ex.: picos de promocao).
+    -- Diferente da media simples, um unico dia de saida excepcionalmente alta
+    -- nao infla o consumo tipico nem distorce cobertura/criticalidade.
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY daily_total)
+    INTO v_median_consumption
+    FROM (
+        SELECT SUM(ABS(im.moved_quantity)) AS daily_total
+        FROM inventory_movement im
+        JOIN inventory i ON i.inventory_id = im.inventory_id
+        JOIN batch b ON b.batch_id = i.batch_id
+        WHERE b.product_id = p_product_id
+          AND i.store_id = p_store_id
+          AND im.movement_type = 'OUT'
+          AND im.movement_date >= NOW() - (p_days || ' days')::INTERVAL
+          AND i.deleted_at IS NULL
+          AND b.deleted_at IS NULL
+        GROUP BY im.movement_date::date
+    ) daily;
+
+    RETURN COALESCE(ROUND(v_median_consumption, 3), 0);
 END;
 $$ LANGUAGE plpgsql STABLE;
 
