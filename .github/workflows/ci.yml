@@ -41,10 +41,12 @@ jobs:
           psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
 
   # ============================================================
-  # JOB 2: Executa o dataLoad 2x (idempotencia) sobre o schema
+  # JOB 2: Valida o dataLoad (artefato exclusivo de TESTE/SEED e nao
+  # parte do install de producao): executado 2x (idempotencia) e com
+  # ASSERTS de quantidade (produtos=60 etc). Nunca roda em producao.
   # ============================================================
   validate-dataload:
-    name: 2. Validar dataLoad (idempotencia)
+    name: 2. Validar dataLoad (teste/seed) com asserts
     runs-on: ubuntu-latest
     needs: validate-schema
     services:
@@ -82,14 +84,43 @@ jobs:
         run: |
           cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f dataLoad.sql
 
-      - name: Validar carga (60 produtos esperados)
+      - name: Asserts de quantidade (carga de teste/seed)
         env:
           PGPASSWORD: mottainai
         run: |
-          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
-            "SELECT 'produtos=' || count(*) FROM mottainai.product;"
-          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
-            "SELECT 'batchs=' || count(*) FROM mottainai.batch;"
+          set -e
+          # ASSERT: dataLoad deve inserir exatamente os produtos do loop (1..60)
+          prod=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT count(*) FROM mottainai.product;")
+          echo "produtos=$prod"
+          if [ "$prod" != "60" ]; then
+            echo "ERRO: esperado 60 produtos, encontrado '$prod'"; exit 1
+          fi
+
+          # ASSERT: batch deve conter dados apos a carga (idempotente, nao vazio)
+          batchs=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT count(*) FROM mottainai.batch;")
+          echo "batchs=$batchs"
+          if [ -z "$batchs" ] || [ "$batchs" -lt 1 ]; then
+            echo "ERRO: nenhum batch apos a carga"; exit 1
+          fi
+
+      - name: Executar suite de testes (run_all_tests) - falha em qualquer FAIL
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          set -e
+          # As funcoes test_0x retornam 'PASS'/'FAIL'. O CI falha se algum
+          # resultado for FAIL, transformando a suite em assert real.
+          out=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tA -c \
+            "SELECT test_name, result FROM run_all_tests();")
+          echo "$out"
+          if echo "$out" | grep -q "FAIL"; then
+            echo "ERRO: pelo menos um teste retornou FAIL"; exit 1
+          fi
+          if ! echo "$out" | grep -q "PASS"; then
+            echo "ERRO: nenhum teste retornou PASS (suite vazia?)"; exit 1
+          fi
 
   # ============================================================
   # JOB 3: Sanidade do SQL (regras de estilo essenciais)

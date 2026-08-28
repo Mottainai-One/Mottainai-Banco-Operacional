@@ -4,6 +4,12 @@
 -- Escopo: cadastro, catálogo, estoque, vendas, alertas, abastecimento,
 --         movimentações, IA e métricas operacionais
 -- Versão: 500+ registros por tabela principal
+--
+-- AVISO: ESTE ARQUIVO E EXCLUSIVO PARA AMBIENTE DE TESTE/SEED.
+-- NAO faz parte do install em producao: install.sql NAO o invoca.
+-- O CI usa apenas para validar que o artefato de dados de teste e
+-- idempotente (executado 2x) sobre o schema. Nunca rodar em
+-- banco real/producao sem revisao.
 -- ====================================================================
 
 SET search_path TO mottainai;
