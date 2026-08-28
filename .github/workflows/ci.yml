@@ -110,6 +110,10 @@ jobs:
           PGPASSWORD: mottainai
         run: |
           set -e
+          # Limpar dados de inventario inseridos pelo dataLoad.sql para evitar
+          # conflitos com test_03_inventory() que insere (store_id=1, batch_id=1).
+          psql -h localhost -p 5432 -U mottainai -d mottainai -c \
+            "DELETE FROM mottainai.inventory;"
           # As funcoes test_0x retornam 'PASS'/'FAIL'. O CI falha se algum
           # resultado for FAIL, transformando a suite em assert real.
           # As funcoes vivem em mottainai_analytics (10_tests herda o search_path
