@@ -112,9 +112,11 @@ jobs:
           set -e
           # As funcoes test_0x retornam 'PASS'/'FAIL'. O CI falha se algum
           # resultado for FAIL, transformando a suite em assert real.
-          # 10_tests.sql herda o search_path de 07_views.sql => mottainai_analytics.
+          # As funcoes vivem em mottainai_analytics (10_tests herda o search_path
+          # de 07_views.sql). Setamos o search_path para que as chamadas internas
+          # unqualified (ex.: test_01_validation()) resolvam nesse schema.
           out=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tA -c \
-            "SELECT test_name, result FROM mottainai_analytics.run_all_tests();")
+            "SET search_path TO mottainai_analytics, mottainai, public; SELECT test_name, result FROM run_all_tests();")
           echo "$out"
           if echo "$out" | grep -q "FAIL"; then
             echo "ERRO: pelo menos um teste retornou FAIL"; exit 1
