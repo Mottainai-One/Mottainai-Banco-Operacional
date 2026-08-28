@@ -17,7 +17,7 @@ BEGIN
         RETURN 'FAIL: Invalid CPF accepted';
     END IF;
     
-    IF NOT fn_validate_cnpj('12345678901234') THEN
+    IF NOT fn_validate_cnpj('11222333000181') THEN
         RETURN 'FAIL: Valid CNPJ rejected';
     END IF;
     
@@ -53,7 +53,7 @@ BEGIN
     RETURNING product_id INTO v_product_id;
     
     INSERT INTO retail_store (company_id, address_id, name, cnpj)
-    VALUES (1, 1, 'Test Store FEFO', '12345678901234')
+    VALUES (1, 1, 'Test Store FEFO', '11222333000181')
     RETURNING store_id INTO v_store_id;
     
     INSERT INTO batch (product_id, receiving_item_id, batch_code, expiration_date, initial_quantity, unit_cost)
