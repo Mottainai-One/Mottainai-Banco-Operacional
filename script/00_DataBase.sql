@@ -13,7 +13,9 @@ CREATE EXTENSION IF NOT EXISTS btree_gin;
 -- 01_SCHEMA.SQL
 -- ====================================================================
 
-DROP SCHEMA IF EXISTS mottainai CASCADE;
+-- Nao usamos DROP SCHEMA ... CASCADE: em ambiente compartilhado isso
+-- apagaria objetos de dependentcias nao relacionados. O install roda em
+-- um database limpo e o reset/carga usa exclusivamente script de seed/teste.
 CREATE SCHEMA IF NOT EXISTS mottainai;
 CREATE SCHEMA IF NOT EXISTS mottainai_analytics;
 SET search_path TO mottainai, public;

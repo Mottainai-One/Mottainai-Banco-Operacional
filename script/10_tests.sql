@@ -17,7 +17,7 @@ BEGIN
         RETURN 'FAIL: Invalid CPF accepted';
     END IF;
     
-    IF NOT fn_validate_cnpj('12345678901234') THEN
+    IF NOT fn_validate_cnpj('11222333000181') THEN
         RETURN 'FAIL: Valid CNPJ rejected';
     END IF;
     
@@ -53,7 +53,7 @@ BEGIN
     RETURNING product_id INTO v_product_id;
     
     INSERT INTO retail_store (company_id, address_id, name, cnpj)
-    VALUES (1, 1, 'Test Store FEFO', '12345678901234')
+    VALUES (1, 1, 'Test Store FEFO', '11222333000181')
     RETURNING store_id INTO v_store_id;
     
     INSERT INTO batch (product_id, receiving_item_id, batch_code, expiration_date, initial_quantity, unit_cost)
@@ -111,21 +111,26 @@ CREATE OR REPLACE FUNCTION test_04_audit()
 RETURNS TEXT AS $$
 DECLARE
     v_audit_count INTEGER;
+    v_disposal_id INTEGER;
 BEGIN
     PERFORM fn_set_session_context(1, 1, 1);
-    
-    UPDATE product SET name = 'Updated Product' WHERE product_id = 1;
-    
+
+    INSERT INTO disposal (store_id, employee_id, reason)
+    VALUES (1, 1, 'Test disposal for audit')
+    RETURNING disposal_id INTO v_disposal_id;
+
+    UPDATE disposal SET observation = 'Updated by test' WHERE disposal_id = v_disposal_id;
+
     SELECT COUNT(*) INTO v_audit_count
     FROM audit_log
-    WHERE table_affected = 'product'
-      AND record_id = '1'
+    WHERE table_affected = 'disposal'
+      AND record_id = v_disposal_id::TEXT
       AND user_id = 1;
-    
+
     IF v_audit_count = 0 THEN
-        RETURN 'FAIL: Audit log not created';
+        RETURN 'FAIL: Audit log not created for disposal';
     END IF;
-    
+
     RETURN 'PASS: Audit tests passed';
 END;
 $$ LANGUAGE plpgsql;
