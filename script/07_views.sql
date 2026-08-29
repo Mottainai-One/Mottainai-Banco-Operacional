@@ -1246,5 +1246,153 @@ LEFT JOIN mottainai.ai_execution ae ON ae.recommendation_id = ar.recommendation_
 GROUP BY ar.action_type;
 
 -- ============================================================================
+-- 25. RANKING DE PRODUTOS COM MAIS PERDAS (tela Inicio)
+-- ============================================================================
+CREATE OR REPLACE VIEW mottainai_analytics.vw_top_loss_products AS
+WITH losses AS (
+    SELECT
+        d.store_id,
+        di.batch_id,
+        b.product_id,
+        'DISPOSAL'::TEXT AS loss_type,
+        di.disposed_quantity AS quantity,
+        di.disposed_quantity * b.unit_cost AS value
+    FROM mottainai.disposal d
+    JOIN mottainai.disposal_item di ON di.disposal_id = d.disposal_id
+    JOIN mottainai.batch b ON b.batch_id = di.batch_id
+    UNION ALL
+    SELECT
+        dn.store_id,
+        dni.batch_id,
+        b.product_id,
+        'DONATION'::TEXT,
+        dni.donated_quantity,
+        dni.donated_quantity * b.unit_cost
+    FROM mottainai.donation dn
+    JOIN mottainai.donation_item dni ON dni.donation_id = dn.donation_id
+    JOIN mottainai.batch b ON b.batch_id = dni.batch_id
+    WHERE dn.status <> 'CANCELED'
+)
+SELECT
+    rs.store_id,
+    rs.name AS store_name,
+    l.product_id,
+    p.sku,
+    p.name AS product_name,
+    pc.name AS category_name,
+    COUNT(*) AS loss_events,
+    COALESCE(SUM(l.quantity), 0)::numeric(18,3) AS total_lost_quantity,
+    COALESCE(SUM(l.value), 0)::numeric(18,2) AS total_lost_value,
+    SUM(l.quantity) FILTER (WHERE l.loss_type = 'DISPOSAL')::numeric(18,3) AS disposed_quantity,
+    SUM(l.value) FILTER (WHERE l.loss_type = 'DISPOSAL')::numeric(18,2) AS disposed_value,
+    DENSE_RANK() OVER (PARTITION BY rs.store_id ORDER BY COALESCE(SUM(l.value), 0) DESC) AS loss_rank
+FROM losses l
+JOIN mottainai.retail_store rs ON rs.store_id = l.store_id
+JOIN mottainai.product p ON p.product_id = l.product_id
+JOIN mottainai.product_category pc ON pc.category_id = p.category_id
+WHERE rs.active = TRUE
+  AND rs.deleted_at IS NULL
+GROUP BY rs.store_id, rs.name, l.product_id, p.sku, p.name, pc.name
+HAVING COALESCE(SUM(l.value), 0) > 0
+ORDER BY rs.store_id ASC, total_lost_value DESC;
+
+-- ============================================================================
+-- 26. SAZONALIDADE - VENDAS POR DIA DA SEMANA (tela Habitos)
+-- ============================================================================
+CREATE OR REPLACE VIEW mottainai_analytics.vw_seasonality_by_weekday AS
+SELECT
+    st.store_id,
+    rs.name AS store_name,
+    EXTRACT(DOW FROM st.sale_date)::INTEGER AS weekday_number,
+    TO_CHAR(st.sale_date, 'TMDay') AS weekday_name,
+    COUNT(DISTINCT (st.sale_id, st.sale_date)) AS sales_count,
+    COALESCE(SUM(st.total_amount) FILTER (WHERE st.status = 'COMPLETED'), 0)::numeric(18,2) AS revenue,
+    COALESCE(SUM(si.quantity_sold) FILTER (WHERE si.status = 'SOLD'), 0)::numeric(18,3) AS units_sold,
+    ROUND(COALESCE(AVG(st.total_amount) FILTER (WHERE st.status = 'COMPLETED'), 0), 2) AS avg_ticket
+FROM mottainai.sales_transaction st
+JOIN mottainai.retail_store rs ON rs.store_id = st.store_id
+LEFT JOIN mottainai.sale_item si
+  ON si.sale_id = st.sale_id
+ AND si.sale_date = st.sale_date
+WHERE st.deleted_at IS NULL
+GROUP BY st.store_id, rs.name, EXTRACT(DOW FROM st.sale_date), TO_CHAR(st.sale_date, 'TMDay')
+ORDER BY st.store_id ASC, weekday_number ASC;
+
+-- ============================================================================
+-- 27. CATEGORIA DE MAIOR SAIDA (tela Habitos)
+-- ============================================================================
+CREATE OR REPLACE VIEW mottainai_analytics.vw_top_selling_categories AS
+SELECT
+    st.store_id,
+    rs.name AS store_name,
+    pc.category_id,
+    pc.name AS category_name,
+    SUM(si.quantity_sold) FILTER (WHERE st.status = 'COMPLETED' AND si.status = 'SOLD')::numeric(18,3) AS quantity_sold,
+    SUM(si.subtotal) FILTER (WHERE st.status = 'COMPLETED' AND si.status = 'SOLD')::numeric(18,2) AS revenue,
+    COUNT(DISTINCT p.product_id) AS distinct_products,
+    DENSE_RANK() OVER (PARTITION BY st.store_id ORDER BY
+        SUM(si.quantity_sold) FILTER (WHERE st.status = 'COMPLETED' AND si.status = 'SOLD') DESC) AS category_rank
+FROM mottainai.sales_transaction st
+JOIN mottainai.retail_store rs ON rs.store_id = st.store_id
+JOIN mottainai.sale_item si
+  ON si.sale_id = st.sale_id
+ AND si.sale_date = st.sale_date
+JOIN mottainai.product p ON p.product_id = si.product_id
+JOIN mottainai.product_category pc ON pc.category_id = p.category_id
+WHERE st.deleted_at IS NULL
+GROUP BY st.store_id, rs.name, pc.category_id, pc.name
+ORDER BY st.store_id ASC, quantity_sold DESC;
+
+-- ============================================================================
+-- 28. DIAGNOSTICO DO MOTOR (tela Visao Geral)
+-- ============================================================================
+CREATE OR REPLACE VIEW mottainai_analytics.vw_engine_diagnostics AS
+SELECT
+    es.store_id,
+    rs.name AS store_name,
+    MAX(es.scanned_at) AS last_scan_at,
+    EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MAX(es.scanned_at))) / 60 AS minutes_since_last_scan,
+    COALESCE(SUM(es.skus_scanned), 0) AS total_skus_scanned,
+    COALESCE(SUM(es.diagnostics_count), 0) AS total_diagnostics,
+    ROUND(COALESCE(AVG(es.assertiveness_rate), 0), 2) AS avg_assertiveness_rate,
+    COUNT(es.scan_id) AS scan_count,
+    (SELECT COUNT(*) FROM mottainai.engine_suggestion s
+      WHERE s.store_id = es.store_id) AS total_suggestions
+FROM mottainai.engine_scan_log es
+JOIN mottainai.retail_store rs ON rs.store_id = es.store_id
+WHERE rs.active = TRUE AND rs.deleted_at IS NULL
+GROUP BY es.store_id, rs.name;
+
+-- ============================================================================
+-- 29. METRICAS DE SUGESTOES DO MOTOR (tela Visao Geral)
+-- ============================================================================
+CREATE OR REPLACE VIEW mottainai_analytics.vw_engine_suggestion_metrics AS
+WITH per_store AS (
+    SELECT
+        es.store_id,
+        rs.name AS store_name,
+        es.tactic,
+        es.status,
+        COUNT(*) AS total
+    FROM mottainai.engine_suggestion es
+    JOIN mottainai.retail_store rs ON rs.store_id = es.store_id
+    WHERE rs.active = TRUE AND rs.deleted_at IS NULL
+    GROUP BY es.store_id, rs.name, es.tactic, es.status
+)
+SELECT
+    store_id,
+    store_name,
+    tactic,
+    COALESCE(SUM(total) FILTER (WHERE status = 'ACCEPTED'), 0) AS accepted,
+    COALESCE(SUM(total) FILTER (WHERE status = 'REJECTED'), 0) AS rejected,
+    COALESCE(SUM(total) FILTER (WHERE status = 'EDITED'), 0) AS edited,
+    COALESCE(SUM(total) FILTER (WHERE status = 'EXECUTED'), 0) AS executed,
+    COALESCE(SUM(total) FILTER (WHERE status IN ('ACCEPTED','EXECUTED')), 0) AS accepted_or_executed,
+    COALESCE(SUM(total), 0) AS total_suggestions
+FROM per_store
+GROUP BY store_id, store_name, tactic
+ORDER BY store_id ASC, total_suggestions DESC;
+
+-- ============================================================================
 -- FIM
 -- ============================================================================

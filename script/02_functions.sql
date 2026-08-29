@@ -486,3 +486,90 @@ BEGIN
     RETURN v_event_id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ====================================================================
+-- 25B_COST_AND_PRICE.SQL
+-- Custo medio ponderado (RF16) e sugestao de preco de venda.
+-- ====================================================================
+
+CREATE OR REPLACE FUNCTION fn_calculate_avg_cost(
+    p_product_id INTEGER
+) RETURNS DECIMAL(10,2) AS $$
+DECLARE
+    v_total_qty DECIMAL(18,3);
+    v_total_cost DECIMAL(18,2);
+    v_avg_cost DECIMAL(10,2);
+BEGIN
+    SELECT COALESCE(SUM(i.current_quantity), 0), COALESCE(SUM(i.current_quantity * b.unit_cost), 0)
+    INTO v_total_qty, v_total_cost
+    FROM inventory i
+    JOIN batch b ON b.batch_id = i.batch_id
+    WHERE b.product_id = p_product_id
+      AND b.active = TRUE
+      AND b.deleted_at IS NULL
+      AND i.deleted_at IS NULL;
+
+    IF v_total_qty = 0 THEN
+        RETURN 0;
+    END IF;
+
+    v_avg_cost := ROUND(v_total_cost / v_total_qty, 2);
+    RETURN v_avg_cost;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION fn_suggest_sale_price(
+    p_product_id INTEGER,
+    p_margin_pct DECIMAL(7,4) DEFAULT NULL
+) RETURNS DECIMAL(10,2) AS $$
+DECLARE
+    v_avg_cost DECIMAL(10,2);
+    v_margin DECIMAL(7,4);
+    v_rule_value TEXT;
+    v_price DECIMAL(10,2);
+BEGIN
+    v_avg_cost := fn_calculate_avg_cost(p_product_id);
+
+    IF p_margin_pct IS NOT NULL THEN
+        v_margin := p_margin_pct;
+    ELSE
+        SELECT rule_value INTO v_rule_value
+        FROM system_rule
+        WHERE rule_category = 'PRICE'
+          AND rule_key = 'DEFAULT_MARGIN'
+          AND active = TRUE;
+        v_margin := COALESCE(v_rule_value::DECIMAL(7,4), 30.0) / 100;
+    END IF;
+
+    v_price := ROUND(v_avg_cost * (1 + v_margin), 2);
+    RETURN v_price;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION fn_refresh_product_price(
+    p_product_id INTEGER
+) RETURNS DECIMAL(10,2) AS $$
+DECLARE
+    v_old_price DECIMAL(10,2);
+    v_new_avg_cost DECIMAL(10,2);
+    v_suggested DECIMAL(10,2);
+BEGIN
+    SELECT avg_cost INTO v_old_price FROM product WHERE product_id = p_product_id;
+
+    v_new_avg_cost := fn_calculate_avg_cost(p_product_id);
+    v_suggested := fn_suggest_sale_price(p_product_id);
+
+    UPDATE product
+    SET avg_cost = v_new_avg_cost,
+        suggested_price = v_suggested,
+        updated_at = NOW()
+    WHERE product_id = p_product_id;
+
+    IF v_old_price IS NOT NULL AND v_old_price <> v_new_avg_cost THEN
+        INSERT INTO product_price_history (product_id, old_price, new_price, changed_at)
+        VALUES (p_product_id, v_old_price, v_new_avg_cost, NOW());
+    END IF;
+
+    RETURN v_new_avg_cost;
+END;
+$$ LANGUAGE plpgsql;
