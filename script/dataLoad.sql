@@ -65,6 +65,9 @@ DELETE FROM error_log;
 DELETE FROM job_log;
 DELETE FROM product_history;
 DELETE FROM audit_log;
+DELETE FROM engine_suggestion;
+DELETE FROM engine_scan_log;
+DELETE FROM system_rule;
 
 -- ====================================================================
 -- 0) RESET DE SEQUENCES (carga idempotente)
@@ -1220,7 +1223,67 @@ BEGIN
 END $$;
 
 -- ====================================================================
--- 15) RESUMO DA CARGA
+-- 15) REGRAS DO SISTEMA (motor / financeiras / validade / preco)
+-- ====================================================================
+
+INSERT INTO system_rule (rule_category, rule_key, rule_name, rule_value, value_type, description) VALUES
+    ('ENGINE', 'SCAN_INTERVAL_MINUTES', 'Intervalo entre varreduras do motor', '60', 'NUMBER', 'Minutos entre ciclos de varredura do motor de shelf life'),
+    ('ENGINE', 'EXPIRATION_WINDOW_DAYS', 'Janela de alerta de vencimento', '15', 'NUMBER', 'Dias de antecedencia para gerar alerta de vencimento'),
+    ('ENGINE', 'MIN_CONSUMPTION_WINDOW_DAYS', 'Janela minima de consumo', '7', 'NUMBER', 'Dias minimos para calcular consumo medio'),
+    ('FINANCIAL', 'DEFAULT_MARGIN', 'Margem padrao de lucro', '30', 'NUMBER', 'Margem em % para sugestao de preco'),
+    ('FINANCIAL', 'MIN_MARGIN', 'Margem minima aceita', '10', 'NUMBER', 'Margem minima em % para aprovacao de promocao'),
+    ('EXPIRATION', 'CRITICAL_ALTER_DAYS', 'Dias para alerta critico', '3', 'NUMBER', 'Dias antes do vencimento para alerta critico'),
+    ('EXPIRATION', 'REASON_MIN_ROTATION', 'Giro minimo para transferencia', '5', 'NUMBER', 'Cobertura minima em dias para sugerir transferencia'),
+    ('PRICE', 'DEFAULT_MARGIN', 'Margem de preco padrao', '30', 'NUMBER', 'Margem usada na sugestao de preco de venda');
+
+-- ====================================================================
+-- 16) MOTOR DE INTELIGENCIA (varreduras e sugestoes)
+-- ====================================================================
+
+DO $$
+DECLARE
+    v_store_id INTEGER;
+    v_scan_id BIGINT;
+    v_tactics TEXT[] := ARRAY['PROMOTION', 'TRANSFER', 'DONATION', 'DISPOSAL', 'REORDER'];
+    v_status TEXT;
+BEGIN
+    FOR v_store_id IN SELECT store_id FROM retail_store
+    LOOP
+        INSERT INTO engine_scan_log (store_id, scanned_at, skus_scanned, diagnostics_count, assertiveness_rate, status)
+        VALUES (
+            v_store_id,
+            NOW() - (random() * interval '2 hours'),
+            50 + floor(random() * 60),
+            5 + floor(random() * 20),
+            70 + round(random() * 25),
+            'COMPLETED'
+        )
+        RETURNING scan_id INTO v_scan_id;
+
+        FOR j IN 1..8 LOOP
+            v_status := (ARRAY['ACCEPTED', 'REJECTED', 'EDITED', 'EXECUTED', 'PENDING'])[1 + floor(random() * 5)];
+            INSERT INTO engine_suggestion (
+                scan_id, store_id, product_id, tactic, suggested_action, status, proposal, decision_at, created_at
+            )
+            SELECT
+                v_scan_id,
+                v_store_id,
+                p.product_id,
+                v_tactics[1 + (j % array_length(v_tactics, 1))],
+                'Sugestao automatica do motor para produto ' || p.name,
+                v_status,
+                jsonb_build_object('suggested', true, 'product', p.name, 'store', v_store_id),
+                CASE WHEN v_status IN ('ACCEPTED', 'REJECTED', 'EDITED', 'EXECUTED') THEN NOW() - (random() * interval '1 day') ELSE NULL END,
+                NOW() - (random() * interval '1 day')
+            FROM product p
+            WHERE p.product_id = 1 + floor(random() * 60)
+            LIMIT 1;
+        END LOOP;
+    END LOOP;
+END $$;
+
+-- ====================================================================
+-- 17) RESUMO DA CARGA
 -- ====================================================================
 
 DO $$
@@ -1261,6 +1324,9 @@ BEGIN
         UNION ALL SELECT 'ai_recommendation', COUNT(*) FROM ai_recommendation
         UNION ALL SELECT 'ai_feedback', COUNT(*) FROM ai_feedback
         UNION ALL SELECT 'event_queue', COUNT(*) FROM event_queue
+        UNION ALL SELECT 'engine_scan_log', COUNT(*) FROM engine_scan_log
+        UNION ALL SELECT 'engine_suggestion', COUNT(*) FROM engine_suggestion
+        UNION ALL SELECT 'system_rule', COUNT(*) FROM system_rule
     LOOP
         RAISE NOTICE '%-: % registros', v_counts.tabela, v_counts.total;
     END LOOP;

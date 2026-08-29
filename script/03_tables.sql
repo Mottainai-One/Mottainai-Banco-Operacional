@@ -183,7 +183,9 @@ CREATE TABLE IF NOT EXISTS product (
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     deleted_at      TIMESTAMP,
-    version         INTEGER NOT NULL DEFAULT 1
+    version         INTEGER NOT NULL DEFAULT 1,
+    avg_cost        DECIMAL(10,2) NOT NULL DEFAULT 0 CHECK (avg_cost >= 0),
+    suggested_price DECIMAL(10,2) CHECK (suggested_price IS NULL OR suggested_price >= 0)
 );
 
 -- ====================================================================
@@ -1100,3 +1102,54 @@ CREATE INDEX IF NOT EXISTS idx_query_performance_function ON query_performance(f
 CREATE TABLE IF NOT EXISTS audit_log_archive (LIKE audit_log);
 CREATE TABLE IF NOT EXISTS inventory_movement_archive (LIKE inventory_movement);
 CREATE TABLE IF NOT EXISTS sales_transaction_archive (LIKE sales_transaction);
+
+-- ====================================================================
+-- 21B_ENGINE_DIAGNOSTICS.SQL
+-- Registro do motor de inteligencia Mottainai: varreduras (scans),
+-- sugestoes taticas e regras de configuracao.
+-- ====================================================================
+
+CREATE TABLE IF NOT EXISTS engine_scan_log (
+    scan_id            BIGSERIAL PRIMARY KEY,
+    store_id           INTEGER REFERENCES retail_store(store_id) ON DELETE CASCADE,
+    scanned_at         TIMESTAMP NOT NULL DEFAULT NOW(),
+    skus_scanned       INTEGER NOT NULL DEFAULT 0 CHECK (skus_scanned >= 0),
+    diagnostics_count  INTEGER NOT NULL DEFAULT 0 CHECK (diagnostics_count >= 0),
+    assertiveness_rate DECIMAL(5,2) CHECK (assertiveness_rate IS NULL OR assertiveness_rate BETWEEN 0 AND 100),
+    status             VARCHAR(20) NOT NULL DEFAULT 'COMPLETED'
+);
+CREATE INDEX IF NOT EXISTS idx_engine_scan_store_time ON engine_scan_log(store_id, scanned_at);
+
+CREATE TABLE IF NOT EXISTS engine_suggestion (
+    suggestion_id    BIGSERIAL PRIMARY KEY,
+    scan_id          BIGINT REFERENCES engine_scan_log(scan_id) ON DELETE SET NULL,
+    store_id         INTEGER REFERENCES retail_store(store_id) ON DELETE CASCADE,
+    product_id       INTEGER REFERENCES product(product_id) ON DELETE CASCADE,
+    tactic           VARCHAR(50) NOT NULL,
+    suggested_action VARCHAR(200),
+    status           VARCHAR(20) NOT NULL DEFAULT 'PENDING'
+                     CHECK (status IN ('PENDING','ACCEPTED','REJECTED','EDITED','EXECUTED')),
+    proposal         JSONB,
+    decision_at      TIMESTAMP,
+    acted_by         INTEGER REFERENCES app_user(user_id) ON DELETE SET NULL,
+    created_at       TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_engine_suggestion_store_status ON engine_suggestion(store_id, status);
+CREATE INDEX IF NOT EXISTS idx_engine_suggestion_tactic ON engine_suggestion(tactic);
+
+CREATE TABLE IF NOT EXISTS system_rule (
+    rule_id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    rule_category  VARCHAR(30) NOT NULL
+                   CHECK (rule_category IN ('ENGINE','FINANCIAL','EXPIRATION','PRICE','GENERAL')),
+    rule_key       VARCHAR(60) NOT NULL,
+    rule_name      VARCHAR(120),
+    rule_value     TEXT,
+    value_type     VARCHAR(20) NOT NULL DEFAULT 'TEXT'
+                   CHECK (value_type IN ('TEXT','NUMBER','BOOLEAN','JSON')),
+    description    TEXT,
+    active         BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (rule_category, rule_key)
+);
+CREATE INDEX IF NOT EXISTS idx_system_rule_category ON system_rule(rule_category);

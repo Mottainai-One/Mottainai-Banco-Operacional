@@ -135,6 +135,86 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION test_05_avg_cost()
+RETURNS TEXT AS $$
+DECLARE
+    v_product_id INTEGER;
+    v_avg DECIMAL(10,2);
+    v_suggested DECIMAL(10,2);
+BEGIN
+    INSERT INTO product (
+        category_id, sku, barcode, name, unit_measure, tax_profile_id, ncm
+    )
+    VALUES (
+        (SELECT category_id FROM product_category ORDER BY category_id LIMIT 1),
+        'TEST-COST-001',
+        'BARCODECOST001',
+        'Test Product Cost',
+        'UN',
+        (SELECT tax_profile_id FROM tax_profile ORDER BY tax_profile_id LIMIT 1),
+        '00000000'
+    )
+    RETURNING product_id INTO v_product_id;
+
+    INSERT INTO batch (product_id, receiving_item_id, batch_code, expiration_date, initial_quantity, unit_cost)
+    VALUES (v_product_id, NULL, 'BATCH-COST-A', '2025-01-01', 100, 10.00);
+
+    INSERT INTO batch (product_id, receiving_item_id, batch_code, expiration_date, initial_quantity, unit_cost)
+    VALUES (v_product_id, NULL, 'BATCH-COST-B', '2025-06-01', 100, 20.00);
+
+    INSERT INTO inventory (store_id, batch_id, current_quantity, minimum_quantity)
+    SELECT 1, batch_id, initial_quantity, 10 FROM batch WHERE product_id = v_product_id;
+
+    v_avg := fn_calculate_avg_cost(v_product_id);
+
+    IF v_avg != 15.00 THEN
+        RETURN 'FAIL: Expected average cost 15.00, got ' || v_avg;
+    END IF;
+
+    v_suggested := fn_suggest_sale_price(v_product_id, 0.20);
+    IF v_suggested != 18.00 THEN
+        RETURN 'FAIL: Expected suggested price 18.00, got ' || v_suggested;
+    END IF;
+
+    RETURN 'PASS: Average cost tests passed';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION test_06_engine_diagnostic()
+RETURNS TEXT AS $$
+DECLARE
+    v_scan_count INTEGER;
+    v_diag_row RECORD;
+BEGIN
+    SELECT COUNT(*) INTO v_scan_count FROM engine_scan_log;
+    IF v_scan_count = 0 THEN
+        RETURN 'FAIL: No engine scan records found';
+    END IF;
+
+    SELECT COUNT(*) INTO v_scan_count FROM engine_suggestion;
+    IF v_scan_count = 0 THEN
+        RETURN 'FAIL: No engine suggestion records found';
+    END IF;
+
+    FOR v_diag_row IN SELECT store_id, total_skus_scanned FROM mottainai_analytics.vw_engine_diagnostics
+    LOOP
+        IF v_diag_row.total_skus_scanned <= 0 THEN
+            RETURN 'FAIL: Engine diagnostics view returned no scanned SKUs';
+        END IF;
+    END LOOP;
+
+    IF NOT EXISTS (SELECT 1 FROM vw_top_selling_categories LIMIT 1) THEN
+        RETURN 'FAIL: Top selling categories view is empty';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM vw_seasonality_by_weekday LIMIT 1) THEN
+        RETURN 'FAIL: Seasonality view is empty';
+    END IF;
+
+    RETURN 'PASS: Engine diagnostic tests passed';
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION run_all_tests()
 RETURNS TABLE(test_name TEXT, result TEXT) AS $$
 BEGIN
@@ -142,5 +222,7 @@ BEGIN
     RETURN QUERY SELECT 'FEFO'::TEXT, test_02_fefo();
     RETURN QUERY SELECT 'Inventory'::TEXT, test_03_inventory();
     RETURN QUERY SELECT 'Audit'::TEXT, test_04_audit();
+    RETURN QUERY SELECT 'AvgCost'::TEXT, test_05_avg_cost();
+    RETURN QUERY SELECT 'EngineDiagnostic'::TEXT, test_06_engine_diagnostic();
 END;
 $$ LANGUAGE plpgsql;
