@@ -152,6 +152,9 @@ CREATE TABLE IF NOT EXISTS fact_transfer (
     loaded_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+COMMENT ON TABLE fact_transfer IS
+    'Fato completo de transferencia entre lojas, no grao de uma transferencia.';
+
 CREATE TABLE IF NOT EXISTS fact_replenishment (
     replenishment_id    BIGINT PRIMARY KEY,
     replenishment_date  DATE NOT NULL,
