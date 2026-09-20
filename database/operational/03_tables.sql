@@ -1031,3 +1031,5 @@ CREATE TABLE IF NOT EXISTS system_rule (
     UNIQUE (rule_category, rule_key)
 );
 CREATE INDEX IF NOT EXISTS idx_system_rule_category ON system_rule(rule_category);
+
+-- End of core table definitions. The supplier table is defined earlier in this file.

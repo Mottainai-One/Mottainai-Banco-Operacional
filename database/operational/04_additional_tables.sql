@@ -210,3 +210,5 @@ BEGIN
     RETURN v_event_uuid;
 END;
 $$ LANGUAGE plpgsql;
+
+-- End of additional table definitions. The password reset token table is complete above.

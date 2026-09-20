@@ -294,3 +294,5 @@ CREATE OR REPLACE TRIGGER trg_batch_update_cost
     AFTER INSERT ON batch
     FOR EACH ROW
     EXECUTE FUNCTION fn_trg_refresh_product_cost();
+
+-- End of trigger definitions. The audit-log trigger function is complete above.
