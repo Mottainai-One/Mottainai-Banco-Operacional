@@ -1,4 +1,7 @@
 \set ON_ERROR_STOP on
+-- This orchestrator intentionally requires psql because it uses \ir to load
+-- modules relative to this file. Other clients must execute the listed files
+-- in the same order or use a migration tool configured with that sequence.
 \echo 'Installing mottainai_operational'
 
 BEGIN;

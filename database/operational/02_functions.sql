@@ -6,6 +6,12 @@
 -- 03_VALIDATION_FUNCTIONS.SQL (TODAS IMMUTABLE)
 -- ====================================================================
 
+-- CPF and CNPJ validation depends only on the supplied text and fixed
+-- check-digit arithmetic. It performs no table lookup, configuration read,
+-- clock access, or locale-dependent operation, so IMMUTABLE is intentional.
+-- If the validation algorithm changes, deploy it with CREATE OR REPLACE
+-- FUNCTION so PostgreSQL invalidates dependent plans normally.
+
 CREATE OR REPLACE FUNCTION fn_validate_cpf(p_cpf CHAR(11))
 RETURNS BOOLEAN AS $$
 DECLARE

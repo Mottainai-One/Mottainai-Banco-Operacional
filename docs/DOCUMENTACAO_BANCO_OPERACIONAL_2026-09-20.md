@@ -92,6 +92,11 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
   -f database/operational/install.sql
 ```
 
+O orquestrador `install.sql` deve ser executado pelo `psql`, pois usa o
+metacomando `\ir` para carregar os módulos em relação ao próprio arquivo.
+Em outra ferramenta de migração, configure a execução dos arquivos na mesma
+ordem declarada pelo instalador.
+
 Mensalmente, executar:
 
 ```sql
