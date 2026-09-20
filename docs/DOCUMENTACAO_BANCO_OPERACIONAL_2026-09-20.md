@@ -154,6 +154,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 |---|---|---|
 | `user_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `employee_id` | `INTEGER NOT NULL UNIQUE REFERENCES employee(employee_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
+| `cpf` | `CHAR(11) NOT NULL UNIQUE CHECK (fn_validate_cpf(cpf))` | CPF sincronizado com `employee.cpf`; dado pessoal restrito. |
 | `email` | `VARCHAR(150) NOT NULL UNIQUE CHECK (fn_validate_email(email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
 | `password_hash` | `VARCHAR(255) NOT NULL` | Hash criptográfico; o valor original não é persistido. |
 | `last_login` | `TIMESTAMP` | Atributo do domínio desta entidade. |
@@ -431,6 +432,15 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `processed_at` | `TIMESTAMP` | Data e hora usada para auditoria ou processamento. |
 | `retry_count` | `INTEGER DEFAULT 0` | Quantidade ou contagem mensurável. |
 | `error_message` | `TEXT` | Atributo do domínio desta entidade. |
+| `event_uuid` | `UUID NOT NULL DEFAULT gen_random_uuid()` | Chave global e idempotente do evento. |
+| `aggregate_type` | `VARCHAR(60)` | Tipo do agregado que originou o evento. |
+| `aggregate_id` | `VARCHAR(120)` | Identificador simples ou composto do agregado. |
+| `company_id` | `INTEGER` | Empresa relacionada ao evento. |
+| `store_id` | `INTEGER` | Loja relacionada ao evento. |
+| `schema_version` | `INTEGER NOT NULL DEFAULT 1` | Versão do contrato do payload. |
+| `occurred_at` | `TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` | Instante em que o fato ocorreu. |
+| `published_at` | `TIMESTAMPTZ` | Instante de confirmação da publicação. |
+| `idempotency_key` | `VARCHAR(180)` | Chave única para impedir publicação duplicada. |
 
 ### `fiscal_document`
 
@@ -763,6 +773,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `version` | `INTEGER NOT NULL DEFAULT 1` | Versão para evolução ou concorrência otimista. |
 | `avg_cost` | `DECIMAL(10,2) NOT NULL DEFAULT 0 CHECK (avg_cost >= 0)` | Valor monetário ou medida financeira. |
 | `suggested_price` | `DECIMAL(10,2) CHECK (suggested_price IS NULL OR suggested_price >= 0)` | Valor monetário ou medida financeira. |
+| `base_price` | `DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (base_price >= 0)` | Preço-base exigido pelo contrato da API. |
 
 ### `product_category`
 
@@ -1159,6 +1170,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `generated_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 | `updated_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
+| `source_recommendation_uuid` | `UUID UNIQUE` | Correlação idempotente com a recomendação analítica. |
 
 ### `supplier`
 
