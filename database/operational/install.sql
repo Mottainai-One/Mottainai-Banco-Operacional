@@ -17,7 +17,9 @@ BEGIN;
 \ir 08_procedures.sql
 \ir 08_partition_maintenance_fix.sql
 \ir 09_seed.sql
+\ir 10_product_company.sql
 \ir 10_tests.sql
+\ir 11_product_company_tests.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'

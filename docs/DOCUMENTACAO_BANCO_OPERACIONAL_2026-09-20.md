@@ -47,6 +47,7 @@ O particionamento melhora poda de partições quando a consulta filtra a coluna 
 
 ```text
 company 1---N retail_store 1---N employee 1---1 app_user
+company 1---N product
 retail_store 1---N inventory N---1 batch N---1 product
 supplier 1---N purchase_order 1---N purchase_order_item N---1 product
 purchase_order 1---N receiving 1---N receiving_item 1---N batch
@@ -96,6 +97,13 @@ O orquestrador `install.sql` deve ser executado pelo `psql`, pois usa o
 metacomando `\ir` para carregar os módulos em relação ao próprio arquivo.
 Em outra ferramenta de migração, configure a execução dos arquivos na mesma
 ordem declarada pelo instalador.
+
+Em uma base já existente, execute `10_product_company.sql`. A migration tenta
+identificar a empresa pelos vínculos do produto com loja, estoque, compra,
+venda, promoção e reposição. Se um produto estiver associado a mais de uma
+empresa, ou não puder ser identificado em uma base com várias empresas, a
+migration interrompe sem adivinhar o proprietário; nesse caso, faça o
+mapeamento explícito e execute novamente.
 
 Mensalmente, executar:
 
@@ -753,17 +761,20 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 
 ### `product`
 
-**Por que existe:** Mantém o cadastro mestre do SKU.
+**Por que existe:** Mantém o cadastro mestre do SKU dentro da empresa proprietária. A empresa é a fronteira de isolamento do catálogo: uma empresa possui vários produtos e cada produto pertence obrigatoriamente a uma única empresa.
 
-**Relacionamentos:** product_category(category_id), tax_profile(tax_profile_id).
+**Relacionamentos:** company(company_id), product_category(category_id), tax_profile(tax_profile_id). A exclusão da empresa é restrita enquanto houver produtos associados.
+
+**Isolamento e unicidade:** a política RLS `product_policy` permite leitura e escrita somente quando `product.company_id` coincide com `app.current_company_id`. SKU e código de barras são únicos dentro de cada empresa, permitindo que empresas diferentes cadastrem os mesmos valores.
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
 | `product_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
+| `company_id` | `INTEGER NOT NULL REFERENCES company(company_id) ON DELETE RESTRICT` | Empresa proprietária do produto e chave de isolamento multiempresa. |
 | `category_id` | `INTEGER NOT NULL REFERENCES product_category(category_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
 | `tax_profile_id` | `INTEGER NOT NULL REFERENCES tax_profile(tax_profile_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
-| `sku` | `VARCHAR(50) NOT NULL UNIQUE` | Atributo do domínio desta entidade. |
-| `barcode` | `VARCHAR(30) NOT NULL UNIQUE` | Atributo do domínio desta entidade. |
+| `sku` | `VARCHAR(50) NOT NULL` | Identificador interno único por empresa por meio de `UNIQUE (company_id, sku)`. |
+| `barcode` | `VARCHAR(30) NOT NULL` | Código de barras único por empresa por meio de `UNIQUE (company_id, barcode)`. |
 | `ncm` | `VARCHAR(8) NOT NULL CHECK (ncm ~ '^\d{8}$')` | Atributo do domínio desta entidade. |
 | `cest` | `VARCHAR(7) CHECK (cest IS NULL OR cest ~ '^\d{7}$')` | Atributo do domínio desta entidade. |
 | `name` | `VARCHAR(150) NOT NULL` | Atributo do domínio desta entidade. |
