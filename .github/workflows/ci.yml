@@ -28,11 +28,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Executar install.sql (schema versionado)
+      - name: Executar install.sql operacional (schema versionado)
         env:
           PGPASSWORD: mottainai
         run: |
-          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Validar reaplicacao do hardening
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 20_security_hardening.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 21_security_hardening_tests.sql
 
       - name: Validar schema criado
         env:
@@ -141,7 +150,7 @@ jobs:
       - name: Verificar consistencia do SQL
         run: |
           set -e
-          for f in script/*.sql; do
+          for f in script/*.sql database/operational/*.sql; do
             echo "==> $f"
             # sem tabs
             if grep -Pn "\t" "$f" >/dev/null; then

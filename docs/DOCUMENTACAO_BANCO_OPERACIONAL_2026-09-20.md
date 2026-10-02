@@ -1,6 +1,6 @@
 # Documentação concreta do banco operacional Mottainai
 
-**Versão:** 2026-09-20
+**Versão:** 2026-10-02
 **Database:** `mottainai_operational`
 **Schema:** `mottainai`
 **Finalidade:** servir como fonte transacional oficial para a operação e como contrato de dados para a API.
@@ -78,12 +78,52 @@ As rotas de escrita devem usar transação, idempotency key e controle otimista 
 
 ## Segurança e LGPD
 
-- CPF, CNPJ, contato, hashes e tokens são dados restritos.
-- Tokens de recuperação são persistidos apenas como hash e têm expiração/uso.
-- RLS restringe empresa e loja; a API precisa definir o contexto da sessão.
-- O usuário da aplicação não deve criar schema, extensão ou partição.
-- Eventos do outbox devem carregar somente os atributos necessários ao analítico.
-- Exclusão lógica preserva rastreabilidade; anonimização atende solicitações de privacidade quando a retenção legal permitir.
+O banco usa defesa em profundidade. A role de grupo `mottainai_api` não possui
+login, privilégios administrativos, capacidade de ignorar RLS ou permissão de
+DDL. O login real da API deve receber essa role e executar `SET ROLE
+mottainai_api` ao abrir a conexão.
+
+| Camada | Controle aplicado |
+|---|---|
+| Identidade | Senhas, refresh tokens e tokens de recuperação são persistidos somente como hash |
+| Sessão | `staff_session` controla expiração, rotação, revogação, IP e dispositivo |
+| Tenant | RLS limita empresa e loja; administrador acessa lojas da própria empresa e demais perfis somente sua loja |
+| Contexto | Funções `SECURITY DEFINER` validam usuário, empresa e loja e usam parâmetros locais à transação |
+| Antifraude de contexto | A API não pode executar o setter antigo, chamar `set_config` nem alterar diretamente os parâmetros `app.current_*` |
+| Privilégios | API recebe apenas operações necessárias e não pode executar DDL, manutenção de partição ou alteração de auditoria |
+| Views | Todas as views da API usam `security_invoker=true` e respeitam o RLS do chamador |
+| Auditoria | Eventos recebem empresa, loja, IP, aplicação e transação; hashes e CPF são removidos do JSON |
+| Disponibilidade | A role da API possui limites de statement, lock e transação ociosa |
+| CI | Instalação limpa, reaplicação, testes de segurança, varredura de segredos e lint SQL |
+
+### Contrato obrigatório da API
+
+Cada requisição autenticada deve executar dentro de uma transação. A API
+valida a senha com Argon2id antes de inicializar o contexto no banco:
+
+```sql
+BEGIN;
+SET LOCAL ROLE mottainai_api;
+SELECT mottainai.fn_bootstrap_staff_context(:identity, :lookup);
+-- consultas e comandos da requisição
+COMMIT;
+```
+
+Para refresh ou recuperação, use respectivamente
+`fn_bootstrap_staff_context_by_session` ou
+`fn_bootstrap_staff_context_by_token`. Um retorno nulo ou falso encerra a
+transação. Nunca devolva hashes, CPF integral, dados de outra empresa ou
+conteúdo de auditoria sem autorização administrativa.
+
+### Responsabilidades de infraestrutura
+
+- exigir TLS com validação do certificado;
+- manter credenciais no secret manager do ambiente, nunca no repositório;
+- usar Argon2id na aplicação e rotação de refresh token a cada uso;
+- ativar backups criptografados, recuperação ponto no tempo e teste periódico de restauração;
+- monitorar tentativas de login, falhas de RLS, revogações e alterações de privilégio;
+- manter logs sem senha, token, CPF integral ou payload pessoal desnecessário;
+- definir retenção e anonimização conforme LGPD e obrigações fiscais.
 
 ## Instalação e manutenção
 
@@ -96,6 +136,19 @@ O orquestrador `install.sql` deve ser executado pelo `psql`, pois usa o
 metacomando `\ir` para carregar os módulos em relação ao próprio arquivo.
 Em outra ferramenta de migração, configure a execução dos arquivos na mesma
 ordem declarada pelo instalador.
+
+O script `20_security_hardening.sql` cria a role de grupo `mottainai_api` sem
+login. Após a instalação, um administrador deve associar o login real do
+Render sem colocar credenciais no SQL versionado:
+
+```sql
+GRANT mottainai_api TO nome_real_do_login_da_api;
+```
+
+O hardening de produto pressupõe a migration que adiciona
+`product.company_id`. Em ambientes atualizados fora de ordem, reaplique
+`20_security_hardening.sql` depois da migration de produto para conceder seus
+privilégios protegidos por RLS.
 
 Mensalmente, executar:
 
@@ -162,6 +215,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `cpf` | `CHAR(11) NOT NULL UNIQUE CHECK (fn_validate_cpf(cpf))` | CPF sincronizado com `employee.cpf`; dado pessoal restrito. |
 | `email` | `VARCHAR(150) NOT NULL UNIQUE CHECK (fn_validate_email(email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
 | `password_hash` | `VARCHAR(255) NOT NULL` | Hash criptográfico; o valor original não é persistido. |
+| `password_set` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o funcionário já definiu a senha inicial. |
 | `last_login` | `TIMESTAMP` | Atributo do domínio desta entidade. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
@@ -184,6 +238,11 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `old_data` | `JSONB` | Atributo do domínio desta entidade. |
 | `new_data` | `JSONB` | Atributo do domínio desta entidade. |
 | `operation_date` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data de negócio e possível filtro temporal. |
+| `company_id` | `INTEGER` | Empresa do contexto que originou a operação. |
+| `store_id` | `INTEGER` | Loja do contexto que originou a operação. |
+| `client_ip` | `INET` | Endereço de origem observado pelo PostgreSQL. |
+| `application_name` | `VARCHAR(100)` | Aplicação cliente declarada na conexão. |
+| `transaction_id` | `BIGINT` | Identificador da transação para correlação forense. |
 
 ### `audit_log_archive`
 
@@ -666,10 +725,30 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `recovery_token_id` | `BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `user_id` | `INTEGER NOT NULL REFERENCES app_user(user_id) ON DELETE CASCADE` | Identificador ou chave de correlação. |
 | `token_hash` | `TEXT NOT NULL UNIQUE` | Hash criptográfico; o valor original não é persistido. |
+| `token_type` | `VARCHAR(30) NOT NULL DEFAULT 'PASSWORD_RESET'` | Finalidade: recuperação de senha ou convite de funcionário. |
 | `expires_at` | `TIMESTAMPTZ NOT NULL` | Atributo do domínio desta entidade. |
 | `used_at` | `TIMESTAMPTZ` | Atributo do domínio desta entidade. |
 | `requested_ip` | `INET` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` | Data e hora usada para auditoria ou processamento. |
+
+### `staff_session`
+
+**Por que existe:** Mantém sessões de funcionários por dispositivo, possibilitando rotação de refresh token, logout, revogação por troca de senha e investigação de acesso sem armazenar o token original.
+
+**Relacionamentos:** app_user(user_id). Um usuário possui zero ou várias sessões.
+
+| Campo | Definição SQL | Uso |
+|---|---|---|
+| `session_id` | `UUID PRIMARY KEY DEFAULT gen_random_uuid()` | Identificador imprevisível da sessão. |
+| `user_id` | `INTEGER NOT NULL REFERENCES app_user(user_id) ON DELETE RESTRICT` | Usuário proprietário da sessão. |
+| `refresh_token_hash` | `TEXT NOT NULL UNIQUE` | Hash do refresh token; nunca contém o token original. |
+| `refresh_expires_at` | `TIMESTAMPTZ NOT NULL` | Limite absoluto de validade da sessão. |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` | Início da sessão. |
+| `last_used_at` | `TIMESTAMPTZ` | Última rotação ou utilização confirmada. |
+| `revoked_at` | `TIMESTAMPTZ` | Momento do logout ou revogação administrativa. |
+| `revoked_reason` | `VARCHAR(80)` | Motivo rastreável da revogação. |
+| `ip_address` | `INET` | IP observado na criação ou renovação. |
+| `user_agent` | `VARCHAR(500)` | Identificação limitada do dispositivo cliente. |
 
 ### `pos_cancel_request`
 

@@ -18,6 +18,8 @@ BEGIN;
 \ir 08_partition_maintenance_fix.sql
 \ir 09_seed.sql
 \ir 10_tests.sql
+\ir 20_security_hardening.sql
+\ir 21_security_hardening_tests.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'
