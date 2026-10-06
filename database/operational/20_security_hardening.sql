@@ -8,26 +8,34 @@ SET search_path TO mottainai, public;
 -- The application role is intentionally NOLOGIN. The real Render login must
 -- be granted membership by a database administrator.
 DO $$
+DECLARE
+    v_is_superuser BOOLEAN;
+    v_has_replication BOOLEAN;
+    v_bypasses_rls BOOLEAN;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mottainai_api') THEN
         CREATE ROLE mottainai_api
             NOLOGIN
-            NOSUPERUSER
             NOCREATEDB
             NOCREATEROLE
-            NOINHERIT
-            NOREPLICATION
-            NOBYPASSRLS;
+            NOINHERIT;
+    END IF;
+
+    SELECT rolsuper, rolreplication, rolbypassrls
+    INTO v_is_superuser, v_has_replication, v_bypasses_rls
+    FROM pg_roles
+    WHERE rolname = 'mottainai_api';
+
+    IF v_is_superuser OR v_has_replication OR v_bypasses_rls THEN
+        RAISE EXCEPTION
+            'Role mottainai_api has a privileged attribute (SUPERUSER, REPLICATION or BYPASSRLS). A PostgreSQL superuser must remove it before this migration can continue.';
     END IF;
 
     ALTER ROLE mottainai_api
         NOLOGIN
-        NOSUPERUSER
         NOCREATEDB
         NOCREATEROLE
-        NOINHERIT
-        NOREPLICATION
-        NOBYPASSRLS;
+        NOINHERIT;
 
     ALTER ROLE mottainai_api SET row_security = ON;
     ALTER ROLE mottainai_api SET statement_timeout = '30s';

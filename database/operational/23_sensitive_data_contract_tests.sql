@@ -55,9 +55,13 @@ BEGIN
         SELECT 1 FROM pg_roles
         WHERE rolname = 'mottainai_customer_api'
           AND NOT rolcanlogin
+          AND NOT rolsuper
+          AND NOT rolcreaterole
+          AND NOT rolcreatedb
+          AND NOT rolreplication
           AND NOT rolbypassrls
     ) THEN
-        RAISE EXCEPTION 'Restricted customer API role is missing';
+        RAISE EXCEPTION 'Customer API role is missing or has an administrative attribute';
     END IF;
 
     IF NOT EXISTS (

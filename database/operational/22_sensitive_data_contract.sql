@@ -393,11 +393,31 @@ CREATE INDEX IF NOT EXISTS idx_legacy_sync_target
 
 -- Dedicated client API role and transaction-local customer context.
 DO $$
+DECLARE
+    v_is_superuser BOOLEAN;
+    v_has_replication BOOLEAN;
+    v_bypasses_rls BOOLEAN;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mottainai_customer_api') THEN
-        CREATE ROLE mottainai_customer_api NOLOGIN NOSUPERUSER NOCREATEDB
-            NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+        CREATE ROLE mottainai_customer_api NOLOGIN NOCREATEDB
+            NOCREATEROLE NOINHERIT;
     END IF;
+
+    SELECT rolsuper, rolreplication, rolbypassrls
+    INTO v_is_superuser, v_has_replication, v_bypasses_rls
+    FROM pg_roles
+    WHERE rolname = 'mottainai_customer_api';
+
+    IF v_is_superuser OR v_has_replication OR v_bypasses_rls THEN
+        RAISE EXCEPTION
+            'Role mottainai_customer_api has a privileged attribute (SUPERUSER, REPLICATION or BYPASSRLS). A PostgreSQL superuser must remove it before this migration can continue.';
+    END IF;
+
+    ALTER ROLE mottainai_customer_api
+        NOLOGIN
+        NOCREATEDB
+        NOCREATEROLE
+        NOINHERIT;
 END;
 $$;
 

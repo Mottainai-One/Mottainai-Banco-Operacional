@@ -20,6 +20,10 @@ sensitive-data contract:
   isolation, consent history, log redaction and RPA correlation;
 - `23_sensitive_data_contract_tests.sql`: protected-data assertions.
 
+The installer also supports managed PostgreSQL administrators that have
+`CREATEROLE` but are not `SUPERUSER`. Privileged role attributes are verified
+instead of being altered by an account that cannot legally change them.
+
 The database does not accept raw CPF, customer documents, customer identity
 values or clear client contact data after module 22. Source backends must apply
 the documented treatment before persistence. See

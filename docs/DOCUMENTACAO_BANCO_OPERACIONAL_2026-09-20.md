@@ -114,6 +114,7 @@ mottainai_api` ao abrir a conexão.
 | Contexto | Funções `SECURITY DEFINER` validam usuário, empresa e loja e usam parâmetros locais à transação |
 | Antifraude de contexto | A API não pode executar o setter antigo, chamar `set_config` nem alterar diretamente os parâmetros `app.current_*` |
 | Privilégios | API recebe apenas operações necessárias e não pode executar DDL, manutenção de partição ou alteração de auditoria |
+| Instalação gerenciada | O migrator pode usar `CREATEROLE` sem `SUPERUSER`; atributos privilegiados existentes são verificados e exigem correção administrativa se estiverem ativos |
 | Views | Todas as views da API usam `security_invoker=true` e respeitam o RLS do chamador |
 | Auditoria | Eventos recebem empresa, loja, IP, aplicação e transação; hashes e CPF são removidos do JSON |
 | Disponibilidade | A role da API possui limites de statement, lock e transação ociosa |
