@@ -20,6 +20,8 @@ BEGIN;
 \ir 10_tests.sql
 \ir 20_security_hardening.sql
 \ir 21_security_hardening_tests.sql
+\ir 22_sensitive_data_contract.sql
+\ir 23_sensitive_data_contract_tests.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'
