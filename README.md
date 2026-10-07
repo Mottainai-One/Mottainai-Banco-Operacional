@@ -11,17 +11,6 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
   -f database/operational/install.sql
 ```
 
-For a fresh database, the equivalent **single-file installer** is:
-
-```bash
-psql -v ON_ERROR_STOP=1 -d mottainai_operational \
-  -f database/operational/mottainai_operational_complete_pr23.sql
-```
-
-The single file contains all 19 modules in installer order, in one transaction,
-and does not require `\ir` or any companion SQL file. Use it only for a fresh
-database; use `update_existing_jpa.sql` for an existing installation.
-
 The final modules establish professional least-privilege security and the
 sensitive-data contract:
 
