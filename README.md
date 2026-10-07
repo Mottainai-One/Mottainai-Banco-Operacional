@@ -19,6 +19,24 @@ sensitive-data contract:
 - `22_sensitive_data_contract.sql`: SHA-256 tokens, BCrypt constraints, customer
   isolation, consent history, log redaction and RPA correlation;
 - `23_sensitive_data_contract_tests.sql`: protected-data assertions.
+- `24_jpa_compatibility.sql`: additive `app_user` fields and password-reset
+  compatibility, including creation of `password_reset_token` when absent;
+- `25_jpa_compatibility_tests.sql`: verifies the JPA compatibility structure.
+
+For a **database already installed locally**, run the incremental update instead
+of reinstalling the entire schema:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_operational \
+  -f database/operational/update_existing_jpa.sql
+```
+
+`update_existing_jpa.sql` runs modules 24 and 25 in one transaction. It is
+repeatable and does not delete existing users or reset tokens. Use a database
+owner or migration role with permission to alter tables and create sequences.
+It fixes the missing `mottainai.password_reset_token` case reported on an older
+local installation. Verify application Flyway history separately; an existing
+database cannot safely be relabeled as having applied the API's migrations.
 
 The installer also supports managed PostgreSQL administrators that have
 `CREATEROLE` but are not `SUPERUSER`. Privileged role attributes are verified

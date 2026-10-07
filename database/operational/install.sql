@@ -22,6 +22,8 @@ BEGIN;
 \ir 21_security_hardening_tests.sql
 \ir 22_sensitive_data_contract.sql
 \ir 23_sensitive_data_contract_tests.sql
+\ir 24_jpa_compatibility.sql
+\ir 25_jpa_compatibility_tests.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'
