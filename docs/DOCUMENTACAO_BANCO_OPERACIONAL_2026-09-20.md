@@ -1,6 +1,6 @@
 # Documentação concreta do banco operacional Mottainai
 
-**Versão:** 2026-09-20
+**Versão:** 2026-10-06
 **Database:** `mottainai_operational`
 **Schema:** `mottainai`
 **Finalidade:** servir como fonte transacional oficial para a operação e como contrato de dados para a API.
@@ -26,9 +26,29 @@ Os scripts instaláveis ficam exclusivamente em `database/operational`. Esta doc
 | RF19-RF21 | Geofence, promoções, cliente e fidelidade | Atende a persistência; push/chatbot ficam na aplicação |
 | RF22-RF25 | PDV, pagamento, fiscal, turno, caixa e cancelamento | Atende a persistência; sincronização offline exige protocolo na API |
 
-## CPF de funcionário e usuário
+## Contrato de dados protegidos
 
-`employee.cpf` é o cadastro principal e permanece único e validado. `app_user.cpf` foi acrescentado por requisito da API. Como o valor está duplicado, triggers impedem divergência: na criação da conta o CPF é obtido do funcionário e, quando o CPF do funcionário muda, a conta é atualizada na mesma transação. CPF nunca deve aparecer em logs, eventos de integração ou respostas sem autorização.
+O banco operacional segue o mesmo conceito acordado para o banco legado. O
+backend de origem trata o dado antes da persistência e o PostgreSQL valida o
+formato recebido. CPF, documento de venda e identificadores externos usam
+tokens SHA-256 prefixados; senhas e códigos de recuperação de baixa entropia
+usam BCrypt; contatos são mascarados, pseudonimizados ou convertidos em token.
+
+`employee.cpf` é o token principal e permanece único. `app_user.cpf` é uma
+cópia controlada por triggers e nunca contém o CPF original. Para manter o RPA
+compatível, o banco aceita tanto `CPF_TKN_XXXXXX`, definido pelo legado, quanto
+`CPF_SHA256_` seguido de 64 caracteres hexadecimais. Dados novos devem usar o
+formato SHA-256.
+
+O módulo de clientes não passa pelo legado, mas segue o mesmo princípio. Nome,
+CPF, e-mail, telefone e UID externo chegam tokenizados. A data de nascimento é
+reduzida para `birth_year`, e o endereço residencial é representado somente por
+`address_token`; não há vínculo com o endereço operacional de lojas.
+
+O banco não possui chave de reversão e não oferece função pública para tratar
+dados brutos. Para identificadores de baixa entropia, como CPF, o backend deve
+usar SHA-256 com segredo do ambiente antes de montar o token. O segredo nunca
+é enviado ao PostgreSQL.
 
 ## Particionamento mensal
 
@@ -78,12 +98,69 @@ As rotas de escrita devem usar transação, idempotency key e controle otimista 
 
 ## Segurança e LGPD
 
-- CPF, CNPJ, contato, hashes e tokens são dados restritos.
-- Tokens de recuperação são persistidos apenas como hash e têm expiração/uso.
-- RLS restringe empresa e loja; a API precisa definir o contexto da sessão.
-- O usuário da aplicação não deve criar schema, extensão ou partição.
-- Eventos do outbox devem carregar somente os atributos necessários ao analítico.
-- Exclusão lógica preserva rastreabilidade; anonimização atende solicitações de privacidade quando a retenção legal permitir.
+O banco usa defesa em profundidade. A role de grupo `mottainai_api` não possui
+login, privilégios administrativos, capacidade de ignorar RLS ou permissão de
+DDL. O login real da API deve receber essa role e executar `SET ROLE
+mottainai_api` ao abrir a conexão.
+
+| Camada | Controle aplicado |
+|---|---|
+| Identidade | Senhas e códigos de recuperação usam BCrypt; tokens de sessão usam SHA-256 |
+| Dados pessoais | CPF, documento de venda, UID externo e contatos são armazenados somente em formato tratado |
+| Cliente | A role `mottainai_customer_api` acessa apenas o cliente autenticado e seus próprios dados de fidelidade |
+| RPA | `legacy_sync_record` mantém correlação e SHA-256 do payload, sem armazenar o payload recebido |
+| Sessão | `staff_session` controla expiração, rotação, revogação, IP e dispositivo |
+| Tenant | RLS limita empresa e loja; administrador acessa lojas da própria empresa e demais perfis somente sua loja |
+| Contexto | Funções `SECURITY DEFINER` validam usuário, empresa e loja e usam parâmetros locais à transação |
+| Antifraude de contexto | A API não pode executar o setter antigo, chamar `set_config` nem alterar diretamente os parâmetros `app.current_*` |
+| Privilégios | API recebe apenas operações necessárias e não pode executar DDL, manutenção de partição ou alteração de auditoria |
+| Instalação gerenciada | O migrator pode usar `CREATEROLE` sem `SUPERUSER`; atributos privilegiados existentes são verificados e exigem correção administrativa se estiverem ativos |
+| Views | Todas as views da API usam `security_invoker=true` e respeitam o RLS do chamador |
+| Auditoria | Eventos recebem empresa, loja, IP, aplicação e transação; hashes e CPF são removidos do JSON |
+| Disponibilidade | A role da API possui limites de statement, lock e transação ociosa |
+| CI | Instalação limpa, reaplicação, testes de segurança, varredura de segredos e lint SQL |
+
+### Contrato obrigatório da API
+
+Cada requisição autenticada deve executar dentro de uma transação. A API
+valida a senha com BCrypt antes de inicializar o contexto no banco. A identidade
+informada ao bootstrap já deve estar tokenizada:
+
+```sql
+BEGIN;
+SET LOCAL ROLE mottainai_api;
+SELECT mottainai.fn_bootstrap_staff_context(:identity, :lookup);
+-- consultas e comandos da requisição
+COMMIT;
+```
+
+Para refresh ou recuperação, use respectivamente
+`fn_bootstrap_staff_context_by_session` ou
+`fn_bootstrap_staff_context_by_token`. Um retorno nulo ou falso encerra a
+transação. Nunca devolva hashes, CPF integral, dados de outra empresa ou
+conteúdo de auditoria sem autorização administrativa.
+
+Para o aplicativo do cliente, a API valida o token Firebase, calcula
+`AUTH_SHA256_<64-hex>` e inicializa o contexto isolado:
+
+```sql
+BEGIN;
+SET LOCAL ROLE mottainai_customer_api;
+SELECT mottainai.fn_bootstrap_customer_context(:external_auth_token);
+-- consultas permitidas do próprio cliente
+COMMIT;
+```
+
+### Responsabilidades de infraestrutura
+
+- exigir TLS com validação do certificado;
+- manter credenciais no secret manager do ambiente, nunca no repositório;
+- usar BCrypt com custo revisado para senhas e códigos de recuperação;
+- gerar tokens SHA-256 no backend e manter o segredo fora do banco;
+- ativar backups criptografados, recuperação ponto no tempo e teste periódico de restauração;
+- monitorar tentativas de login, falhas de RLS, revogações e alterações de privilégio;
+- manter logs sem senha, token, CPF integral ou payload pessoal desnecessário;
+- definir retenção e anonimização conforme LGPD e obrigações fiscais.
 
 ## Instalação e manutenção
 
@@ -96,6 +173,19 @@ O orquestrador `install.sql` deve ser executado pelo `psql`, pois usa o
 metacomando `\ir` para carregar os módulos em relação ao próprio arquivo.
 Em outra ferramenta de migração, configure a execução dos arquivos na mesma
 ordem declarada pelo instalador.
+
+O script `20_security_hardening.sql` cria a role de grupo `mottainai_api` sem
+login. Após a instalação, um administrador deve associar o login real do
+Render sem colocar credenciais no SQL versionado:
+
+```sql
+GRANT mottainai_api TO nome_real_do_login_da_api;
+```
+
+O hardening de produto pressupõe a migration que adiciona
+`product.company_id`. Em ambientes atualizados fora de ordem, reaplique
+`20_security_hardening.sql` depois da migration de produto para conceder seus
+privilégios protegidos por RLS.
 
 Mensalmente, executar:
 
@@ -162,6 +252,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `cpf` | `CHAR(11) NOT NULL UNIQUE CHECK (fn_validate_cpf(cpf))` | CPF sincronizado com `employee.cpf`; dado pessoal restrito. |
 | `email` | `VARCHAR(150) NOT NULL UNIQUE CHECK (fn_validate_email(email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
 | `password_hash` | `VARCHAR(255) NOT NULL` | Hash criptográfico; o valor original não é persistido. |
+| `password_set` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o funcionário já definiu a senha inicial. |
 | `last_login` | `TIMESTAMP` | Atributo do domínio desta entidade. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
@@ -184,6 +275,11 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `old_data` | `JSONB` | Atributo do domínio desta entidade. |
 | `new_data` | `JSONB` | Atributo do domínio desta entidade. |
 | `operation_date` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data de negócio e possível filtro temporal. |
+| `company_id` | `INTEGER` | Empresa do contexto que originou a operação. |
+| `store_id` | `INTEGER` | Loja do contexto que originou a operação. |
+| `client_ip` | `INET` | Endereço de origem observado pelo PostgreSQL. |
+| `application_name` | `VARCHAR(100)` | Aplicação cliente declarada na conexão. |
+| `transaction_id` | `BIGINT` | Identificador da transação para correlação forense. |
 
 ### `audit_log_archive`
 
@@ -242,18 +338,22 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 
 **Por que existe:** Cadastra o cliente do aplicativo.
 
-**Relacionamentos:** address(address_id).
+**Relacionamentos:** possui relacionamento lógico com fidelidade, consentimento
+e geofence. `address_id` é mantido apenas por compatibilidade estrutural e deve
+permanecer nulo para clientes.
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
 | `customer_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
-| `full_name` | `VARCHAR(150) NOT NULL` | Atributo do domínio desta entidade. |
-| `cpf` | `CHAR(11) UNIQUE CHECK (cpf IS NULL OR fn_validate_cpf(cpf))` | CPF normalizado com 11 dígitos; dado pessoal restrito. |
-| `email` | `VARCHAR(150) CHECK (fn_validate_email(email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
-| `phone` | `VARCHAR(20)` | Atributo do domínio desta entidade. |
-| `address_id` | `INTEGER REFERENCES address(address_id) ON DELETE SET NULL` | Identificador ou chave de correlação. |
-| `external_auth_uid` | `VARCHAR(150) UNIQUE` | Atributo do domínio desta entidade. |
-| `birth_date` | `DATE` | Data de negócio e possível filtro temporal. |
+| `full_name` | `VARCHAR(150) NOT NULL` | Token `CUS_SHA256_<64-hex>`; nunca contém o nome original. |
+| `cpf` | `VARCHAR(80) UNIQUE` | Token `CPF_SHA256_<64-hex>`; nunca contém o CPF original. |
+| `email` | `VARCHAR(150)` | Token `EMAIL_SHA256_<64-hex>`. |
+| `phone` | `VARCHAR(80)` | Token `PHONE_SHA256_<64-hex>`. |
+| `address_id` | `INTEGER` | Compatibilidade; constraint exige valor nulo para cliente. |
+| `external_auth_uid` | `VARCHAR(150) UNIQUE` | Token `AUTH_SHA256_<64-hex>` do subject Firebase. |
+| `birth_year` | `SMALLINT` | Minimização da data de nascimento para o ano. |
+| `address_token` | `VARCHAR(80)` | Token SHA-256 do endereço residencial, quando necessário. |
+| `data_protection_version` | `SMALLINT NOT NULL DEFAULT 1` | Versão do contrato de tratamento aplicado pelo backend. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `marketing_consent` | `BOOLEAN NOT NULL DEFAULT FALSE` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
@@ -270,17 +370,35 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 |---|---|---|
 | `customer_auth_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `customer_id` | `INTEGER NOT NULL UNIQUE REFERENCES customer(customer_id) ON DELETE CASCADE` | Identificador ou chave de correlação. |
-| `login_email` | `VARCHAR(150) NOT NULL UNIQUE CHECK (fn_validate_email(login_email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
-| `password_hash` | `TEXT NOT NULL` | Hash criptográfico; o valor original não é persistido. |
+| `login_email` | `VARCHAR(150) NOT NULL UNIQUE` | Token `EMAIL_SHA256_<64-hex>`. |
+| `password_hash` | `TEXT NOT NULL` | BCrypt; o valor original nunca é persistido. |
 | `password_changed_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Atributo do domínio desta entidade. |
 | `failed_attempts` | `INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0)` | Atributo do domínio desta entidade. |
 | `locked_until` | `TIMESTAMP` | Atributo do domínio desta entidade. |
-| `recovery_token_hash` | `TEXT` | Hash criptográfico; o valor original não é persistido. |
+| `recovery_token_hash` | `TEXT` | BCrypt do código de recuperação de baixa entropia. |
 | `recovery_expires_at` | `TIMESTAMP` | Atributo do domínio desta entidade. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `last_login_at` | `TIMESTAMP` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 | `updated_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
+
+### `customer_consent`
+
+**Por que existe:** Mantém evidência versionada de concessão e retirada de
+consentimento, sem copiar dados pessoais.
+
+**Relacionamentos:** customer(customer_id).
+
+| Campo | Definição SQL | Uso |
+|---|---|---|
+| `customer_consent_id` | `BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador do evento de consentimento. |
+| `customer_id` | `INTEGER NOT NULL REFERENCES customer(customer_id) ON DELETE CASCADE` | Cliente proprietário do consentimento. |
+| `consent_type` | `VARCHAR(40) NOT NULL` | Política, marketing, geolocalização ou fidelidade. |
+| `granted` | `BOOLEAN NOT NULL` | Indica concessão ou retirada. |
+| `policy_version` | `VARCHAR(40) NOT NULL` | Versão exata do texto aceito. |
+| `collection_channel` | `VARCHAR(30) NOT NULL` | Canal em que a decisão foi registrada. |
+| `recorded_at` | `TIMESTAMPTZ NOT NULL` | Momento da manifestação. |
+| `withdrawn_at` | `TIMESTAMPTZ` | Momento obrigatório para uma retirada. |
 
 ### `customer_geofence`
 
@@ -590,6 +708,27 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `details` | `JSONB` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 
+### `legacy_sync_record`
+
+**Por que existe:** Permite ao RPA repetir ou auditar a transferência entre os
+dois PostgreSQL físicos sem duplicar registros e sem guardar o payload pessoal.
+
+**Relacionamentos:** usa identificadores externos textuais para não criar FK
+entre bancos físicos independentes.
+
+| Campo | Definição SQL | Uso |
+|---|---|---|
+| `legacy_sync_id` | `BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador local da sincronização. |
+| `source_system` | `VARCHAR(40) NOT NULL` | Banco físico de origem. |
+| `source_table` | `VARCHAR(80) NOT NULL` | Tabela legada de origem. |
+| `source_record_id` | `VARCHAR(120) NOT NULL` | Chave idempotente do registro de origem. |
+| `target_table` | `VARCHAR(80) NOT NULL` | Tabela operacional receptora. |
+| `target_record_id` | `VARCHAR(120) NOT NULL` | Chave criada ou atualizada no operacional. |
+| `payload_sha256` | `CHAR(64) NOT NULL` | SHA-256 do payload tratado para detectar alterações. |
+| `sync_status` | `VARCHAR(20) NOT NULL` | Estado da aplicação ou repetição. |
+| `synchronized_at` | `TIMESTAMPTZ NOT NULL` | Data da sincronização. |
+| `error_code` | `VARCHAR(40)` | Código técnico sem payload ou informação pessoal. |
+
 ### `loyalty_account`
 
 **Por que existe:** Mantém a conta e o saldo de pontos.
@@ -665,11 +804,31 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 |---|---|---|
 | `recovery_token_id` | `BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `user_id` | `INTEGER NOT NULL REFERENCES app_user(user_id) ON DELETE CASCADE` | Identificador ou chave de correlação. |
-| `token_hash` | `TEXT NOT NULL UNIQUE` | Hash criptográfico; o valor original não é persistido. |
+| `token_hash` | `TEXT NOT NULL UNIQUE` | BCrypt para recuperação de senha; SHA-256 para convite de alta entropia. |
+| `token_type` | `VARCHAR(30) NOT NULL DEFAULT 'PASSWORD_RESET'` | Finalidade: recuperação de senha ou convite de funcionário. |
 | `expires_at` | `TIMESTAMPTZ NOT NULL` | Atributo do domínio desta entidade. |
 | `used_at` | `TIMESTAMPTZ` | Atributo do domínio desta entidade. |
 | `requested_ip` | `INET` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` | Data e hora usada para auditoria ou processamento. |
+
+### `staff_session`
+
+**Por que existe:** Mantém sessões de funcionários por dispositivo, possibilitando rotação de refresh token, logout, revogação por troca de senha e investigação de acesso sem armazenar o token original.
+
+**Relacionamentos:** app_user(user_id). Um usuário possui zero ou várias sessões.
+
+| Campo | Definição SQL | Uso |
+|---|---|---|
+| `session_id` | `UUID PRIMARY KEY DEFAULT gen_random_uuid()` | Identificador imprevisível da sessão. |
+| `user_id` | `INTEGER NOT NULL REFERENCES app_user(user_id) ON DELETE RESTRICT` | Usuário proprietário da sessão. |
+| `refresh_token_hash` | `TEXT NOT NULL UNIQUE` | SHA-256 hexadecimal do refresh token de alta entropia. |
+| `refresh_expires_at` | `TIMESTAMPTZ NOT NULL` | Limite absoluto de validade da sessão. |
+| `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` | Início da sessão. |
+| `last_used_at` | `TIMESTAMPTZ` | Última rotação ou utilização confirmada. |
+| `revoked_at` | `TIMESTAMPTZ` | Momento do logout ou revogação administrativa. |
+| `revoked_reason` | `VARCHAR(80)` | Motivo rastreável da revogação. |
+| `ip_address` | `INET` | IP observado na criação ou renovação. |
+| `user_agent` | `VARCHAR(500)` | Identificação limitada do dispositivo cliente. |
 
 ### `pos_cancel_request`
 
@@ -1082,7 +1241,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 | `employee_id` | `INTEGER NOT NULL REFERENCES employee(employee_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
 | `shift_id` | `INTEGER NOT NULL REFERENCES pos_shift(shift_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
 | `customer_id` | `INTEGER REFERENCES customer(customer_id) ON DELETE SET NULL` | Identificador ou chave de correlação. |
-| `customer_document` | `VARCHAR(14) CHECK (customer_document IS NULL OR customer_document ~ '^\d{11}(\d{3})?$')` | Atributo do domínio desta entidade. |
+| `customer_document` | `VARCHAR(80)` | Token `DOC_SHA256_<64-hex>`; nunca contém CPF ou CNPJ aberto. |
 | `sale_date` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data de negócio e possível filtro temporal. |
 | `total_amount` | `DECIMAL(12,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0)` | Valor monetário ou medida financeira. |
 | `status` | `sale_status NOT NULL DEFAULT 'COMPLETED'` | Estado atual do ciclo de vida. |

@@ -28,17 +28,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Executar install.sql (schema versionado)
+      - name: Executar install.sql operacional (schema versionado)
         env:
           PGPASSWORD: mottainai
         run: |
-          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Validar reaplicacao do hardening e dados protegidos
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 20_security_hardening.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 22_sensitive_data_contract.sql
 
       - name: Validar schema criado
         env:
           PGPASSWORD: mottainai
         run: |
           psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
+
+      - name: Validar administrador gerenciado sem SUPERUSER
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE managed_migrator LOGIN CREATEROLE PASSWORD 'mottainai';" \
+            -c "CREATE DATABASE mottainai_managed OWNER managed_migrator;"
+          cd database/operational
+          psql -h localhost -p 5432 -U managed_migrator -d mottainai_managed \
+            -v ON_ERROR_STOP=1 -f install.sql
+          psql -h localhost -p 5432 -U managed_migrator -d mottainai_managed \
+            -v ON_ERROR_STOP=1 -f install.sql
 
   # ============================================================
   # JOB 2: Valida o dataLoad (artefato exclusivo de TESTE/SEED e nao
@@ -141,7 +163,7 @@ jobs:
       - name: Verificar consistencia do SQL
         run: |
           set -e
-          for f in script/*.sql; do
+          for f in script/*.sql database/operational/*.sql; do
             echo "==> $f"
             # sem tabs
             if grep -Pn "\t" "$f" >/dev/null; then
