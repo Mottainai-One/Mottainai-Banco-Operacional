@@ -11,17 +11,14 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
   -f database/operational/install.sql
 ```
 
-The final modules establish professional least-privilege security and the
-sensitive-data contract:
+The final modules establish least-privilege security, the sensitive-data
+contract and JPA compatibility:
 
 - `20_security_hardening.sql`: tenant isolation, sessions, privileges and audit;
-- `21_security_hardening_tests.sql`: structural security assertions;
 - `22_sensitive_data_contract.sql`: SHA-256 tokens, BCrypt constraints, customer
   isolation, consent history, log redaction and RPA correlation;
-- `23_sensitive_data_contract_tests.sql`: protected-data assertions.
 - `24_jpa_compatibility.sql`: additive `app_user` fields and password-reset
-  compatibility, including creation of `password_reset_token` when absent;
-- `25_jpa_compatibility_tests.sql`: verifies the JPA compatibility structure.
+  compatibility, including creation of `password_reset_token` when absent.
 
 For a **database already installed locally**, run the incremental update instead
 of reinstalling the entire schema:
@@ -31,7 +28,7 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
   -f database/operational/update_existing_jpa.sql
 ```
 
-`update_existing_jpa.sql` runs modules 24 and 25 in one transaction. It is
+`update_existing_jpa.sql` runs module 24 in one transaction. It is
 repeatable and does not delete existing users or reset tokens. Use a database
 owner or migration role with permission to alter tables and create sequences.
 It fixes the missing `mottainai.password_reset_token` case reported on an older

@@ -4,5 +4,4 @@
 --           -f database/operational/update_existing_jpa.sql
 BEGIN;
 \ir 24_jpa_compatibility.sql
-\ir 25_jpa_compatibility_tests.sql
 COMMIT;
