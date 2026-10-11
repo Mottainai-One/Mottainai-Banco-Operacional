@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS inventory_count_item (
     difference              DECIMAL(12,3) GENERATED ALWAYS AS (counted_quantity - system_quantity) STORED,
     observation             TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at              TIMESTAMPTZ,
     UNIQUE (inventory_count_id, inventory_id)
 );
 

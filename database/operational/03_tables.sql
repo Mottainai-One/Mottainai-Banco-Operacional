@@ -392,6 +392,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_item (
     subtotal        DECIMAL(12,2) GENERATED ALWAYS AS (requested_quantity * unit_price) STORED,
     order_date      TIMESTAMP NOT NULL,
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMP,
     FOREIGN KEY (purchase_order_id, order_date)
         REFERENCES purchase_order(purchase_order_id, order_date) ON DELETE CASCADE
 );
@@ -943,6 +944,7 @@ CREATE TABLE IF NOT EXISTS integration_log (
 
 CREATE TABLE IF NOT EXISTS job_log (
     job_id          BIGSERIAL PRIMARY KEY,
+    company_id      INTEGER REFERENCES company(company_id) ON DELETE RESTRICT,
     job_name        VARCHAR(100) NOT NULL,
     job_type        VARCHAR(50),
     start_time      TIMESTAMP NOT NULL,

@@ -148,21 +148,21 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION fn_get_current_user_id()
 RETURNS INTEGER AS $$
 BEGIN
-    RETURN COALESCE(current_setting('app.current_user_id', TRUE)::INTEGER, NULL);
+    RETURN NULLIF(current_setting('app.current_user_id', TRUE), '')::INTEGER;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 CREATE OR REPLACE FUNCTION fn_get_current_company_id()
 RETURNS INTEGER AS $$
 BEGIN
-    RETURN COALESCE(current_setting('app.current_company_id', TRUE)::INTEGER, NULL);
+    RETURN NULLIF(current_setting('app.current_company_id', TRUE), '')::INTEGER;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 CREATE OR REPLACE FUNCTION fn_get_current_store_id()
 RETURNS INTEGER AS $$
 BEGIN
-    RETURN COALESCE(current_setting('app.current_store_id', TRUE)::INTEGER, NULL);
+    RETURN NULLIF(current_setting('app.current_store_id', TRUE), '')::INTEGER;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
