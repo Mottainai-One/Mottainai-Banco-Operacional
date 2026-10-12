@@ -11,5 +11,6 @@ BEGIN;
 \ir 06_indexes.sql
 \ir 07_views.sql
 \ir 08_seed.sql
+\ir 10_dashboard.sql
 \ir 09_tests.sql
 COMMIT;
