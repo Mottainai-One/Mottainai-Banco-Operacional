@@ -613,6 +613,16 @@ CREATE INDEX IF NOT EXISTS idx_etl_dead_letter_unresolved
 -- ===== 07_views.sql =====
 SET search_path TO mottainai_analytics, public;
 
+-- Reference date remains fixed until the next successful publication.
+CREATE OR REPLACE VIEW vw_published_batch AS
+SELECT job_id, started_at AS source_cutoff_at,
+       (started_at AT TIME ZONE 'America/Sao_Paulo')::date AS snapshot_date
+FROM job_log
+WHERE job_name = 'operational_to_analytics_daily'
+  AND status::text = 'SUCCEEDED'
+ORDER BY job_id DESC
+LIMIT 1;
+
 CREATE OR REPLACE VIEW vw_sales_daily_kpis AS
 SELECT
     fs.sale_date,
@@ -675,7 +685,8 @@ LEFT JOIN dim_product dp ON dp.product_id = current_stock.product_id
 LEFT JOIN (
     SELECT store_id, product_id, sum(quantity) AS units_sold_30d
     FROM fact_sale_item
-    WHERE sale_date >= current_date - 29
+    CROSS JOIN vw_published_batch b
+    WHERE sale_date BETWEEN b.snapshot_date - 29 AND b.snapshot_date
     GROUP BY store_id, product_id
 ) sales
     ON sales.store_id = current_stock.store_id
@@ -928,15 +939,16 @@ LEFT JOIN units ON units.month_start = sales.month_start AND units.store_id = sa
 CREATE OR REPLACE VIEW vw_product_risk_ranking AS
 WITH expiration AS (
     SELECT i.store_id, i.product_id,
-           sum(i.quantity) FILTER (WHERE i.expiration_date BETWEEN current_date AND current_date + 15)
+           sum(i.quantity) FILTER (WHERE i.expiration_date BETWEEN b.snapshot_date AND b.snapshot_date + 15)
                AS quantity_at_expiration_risk,
            sum(i.quantity * coalesce(i.average_cost, 0)) FILTER
-               (WHERE i.expiration_date BETWEEN current_date AND current_date + 15)
+               (WHERE i.expiration_date BETWEEN b.snapshot_date AND b.snapshot_date + 15)
                AS value_at_expiration_risk,
-           min(i.expiration_date - current_date) FILTER
-               (WHERE i.expiration_date >= current_date) AS nearest_expiration_days
+           min(i.expiration_date - b.snapshot_date) FILTER
+               (WHERE i.expiration_date >= b.snapshot_date) AS nearest_expiration_days
     FROM vw_inventory_snapshot_current i
-    GROUP BY i.store_id, i.product_id
+    CROSS JOIN vw_published_batch b
+    GROUP BY i.store_id, i.product_id, b.snapshot_date
 )
 SELECT x.store_id, s.name AS store_name, x.product_id, x.product_name,
        CASE WHEN x.available_quantity <= 0 THEN 'CRITICAL'
@@ -957,23 +969,28 @@ JOIN dim_store s ON s.store_id = x.store_id
 LEFT JOIN expiration e ON e.store_id = x.store_id AND e.product_id = x.product_id;
 
 -- Uma linha por loja. Atualizada ao fim de cada carga diaria; nunca consulta o operacional.
+DROP MATERIALIZED VIEW IF EXISTS mv_dashboard_metrics;
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_dashboard_metrics AS
 WITH sales AS (
     SELECT store_id, count(*) AS transactions, sum(net_amount) AS revenue,
            avg(net_amount) AS avg_ticket
     FROM fact_sales
-    WHERE sale_date >= current_date - 1 AND status = 'COMPLETED'
+    CROSS JOIN vw_published_batch b
+    WHERE sale_date BETWEEN b.snapshot_date - 1 AND b.snapshot_date
+      AND status = 'COMPLETED'
     GROUP BY store_id
 ), products AS (
     SELECT i.store_id, count(DISTINCT i.product_id) AS products_sold
     FROM fact_sale_item i
     JOIN fact_sales s ON s.sale_id = i.sale_id AND s.sale_date = i.sale_date
-    WHERE i.sale_date >= current_date - 1 AND s.status = 'COMPLETED'
+    CROSS JOIN vw_published_batch b
+    WHERE i.sale_date BETWEEN b.snapshot_date - 1 AND b.snapshot_date
+      AND s.status = 'COMPLETED'
     GROUP BY i.store_id
 ), alerts AS (
     SELECT store_id, count(*) AS active_alerts
     FROM fact_alert_snapshot
-    WHERE snapshot_date = (SELECT max(snapshot_date) FROM fact_alert_snapshot)
+    WHERE snapshot_date = (SELECT snapshot_date FROM vw_published_batch)
       AND status = 'ACTIVE'
     GROUP BY store_id
 ), ruptures AS (
