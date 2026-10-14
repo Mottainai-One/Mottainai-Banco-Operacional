@@ -5,6 +5,44 @@ on:
   push:
 
 jobs:
+  validate-analytics:
+    name: 0. Validar banco analitico diario
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: mottainai
+          POSTGRES_PASSWORD: mottainai
+          POSTGRES_DB: mottainai_analytics
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mottainai -d mottainai_analytics"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar e testar banco analitico
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/analytics
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Validar reaplicacao idempotente
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/analytics
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f install.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f 13_daily_batch_tests.sql
+
   # ============================================================
   # JOB 1: Valida o schema em um PostgreSQL 15 limpo
   # ============================================================
