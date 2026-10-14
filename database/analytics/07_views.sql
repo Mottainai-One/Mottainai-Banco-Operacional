@@ -3,7 +3,9 @@ SET search_path TO mottainai_analytics, public;
 -- Reference date remains fixed until the next successful publication.
 CREATE OR REPLACE VIEW vw_published_batch AS
 SELECT job_id, started_at AS source_cutoff_at,
-       (started_at AT TIME ZONE 'America/Sao_Paulo')::date AS snapshot_date
+       (started_at AT TIME ZONE 'America/Sao_Paulo')::date AS snapshot_date,
+       NULL::UUID AS batch_id,
+       finished_at AS published_at
 FROM job_log
 WHERE job_name = 'operational_to_analytics_daily'
   AND status::text = 'SUCCEEDED'
@@ -52,7 +54,9 @@ SELECT DISTINCT ON (store_id, product_id, batch_id, inventory_type)
     reserved_quantity,
     quantity - reserved_quantity AS available_quantity,
     average_cost,
-    expiration_date
+    expiration_date,
+    NULL::BIGINT AS inventory_id,
+    NULL::NUMERIC(15,3) AS minimum_quantity
 FROM fact_inventory_snapshot
 ORDER BY store_id, product_id, batch_id, inventory_type, snapshot_date DESC;
 

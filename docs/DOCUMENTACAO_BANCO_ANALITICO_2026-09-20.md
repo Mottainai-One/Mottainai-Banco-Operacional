@@ -1,13 +1,24 @@
 # Documentação concreta do banco analítico Mottainai
 
-**Versão:** 2026-09-20
+**Versão:** 2026-10-14
 **Database:** `mottainai_analytics`
 **Schema:** `mottainai_analytics`
 **Finalidade:** sustentar BI, histórico, indicadores, previsões e recomendações sem disputar recursos com o banco operacional.
 
 ## Decisão de arquitetura
 
-O banco analítico recebe somente transações confirmadas. Ele organiza atributos em dimensões e medidas em fatos, registra a ingestão idempotente e mantém objetos de IA. Não existem FKs, `dblink` ou escrita SQL direta entre databases; IDs operacionais são chaves de correlação.
+O banco analítico recebe o estado de negócio do banco operacional em uma carga
+batch diária, iniciada às **02:00 no fuso `America/Sao_Paulo`**, depois do
+fechamento do turno. A data de negócio publicada é o dia anterior (`D-1`). Ele
+organiza atributos em dimensões e medidas em fatos, registra staging,
+reconciliação, checkpoint e mantém objetos de IA. Não existem FKs, `dblink` ou
+transação distribuída entre databases; IDs operacionais são chaves de
+correlação.
+
+O termo “réplica” significa réplica analítica do estado de negócio, não réplica
+física PostgreSQL. Credenciais, hashes de senha ou sessão, tokens de
+recuperação, payloads de integração, stack traces e dados pessoais sem
+finalidade analítica não são copiados.
 
 Os scripts instaláveis ficam exclusivamente em `database/analytics`. Esta documentação fica fora da pasta de scripts e serve como contrato para pipelines, dashboards e APIs de consulta.
 
@@ -17,7 +28,7 @@ Os scripts instaláveis ficam exclusivamente em `database/analytics`. Esta docum
 |---|---|---|
 | Business Intelligence | Modelo estrela, dimensão calendário, fatos, snapshots, KPIs, views e cargas incrementais | Atende |
 | Modelagem de dados | Grão documentado, chaves de negócio, dimensões conformadas e separação entre fatos e dimensões | Atende |
-| Desenvolvimento operacional | Inbox idempotente, checkpoint, dead letter, logs de job e contratos de recomendação | Atende a integração |
+| Desenvolvimento operacional | Batch diário idempotente, staging, reconciliação, checkpoint, rejeição, logs de job e contratos de recomendação | Atende a integração |
 | RF01-RF03 | Views de vendas, produtos, perdas, ticket e dashboard executivo | Atende a camada de dados |
 | RF06-RF11 | Histórico de estoque/venda, modelos, previsões, recomendações, feedback e métricas | Atende |
 | RF13 | Dados de fluxo por loja para recomendação de transferência | Atende |
@@ -50,24 +61,72 @@ Tabelas de menor volume não são particionadas nesta fase. Essa escolha reduz p
 
 Queries de dashboard precisam filtrar a chave de partição diretamente. Evitar funções sobre a coluna no predicado, como `date_trunc('month', sale_date)`, quando um intervalo puder ser usado.
 
-## Fluxo de integração
+## Fluxo de integração diário
 
 ```text
-event_queue operacional
+Fechamento do turno (D-1)
         |
+        | scheduler externo às 02:00 America/Sao_Paulo
         v
-ingestion_event -> validação da versão -> dimensões -> fatos -> checkpoint
-        |                                      |
-        +-> etl_dead_letter                    +-> views e KPIs
-                                                       |
-                                                       v
-                                               modelos e recomendações
-                                                       |
-                                                       v
-                                      API -> suggested_action operacional
+extração operacional -> stg_operational_row -> reconciliação por tabela
+                                |                         |
+                                |                         +-> falha sem checkpoint
+                                v
+                       dimensões e fatos -> validação -> publicação atômica
+                                                             |
+                                                             +-> checkpoint
+                                                             +-> views e KPIs
+                                                             +-> modelos de IA
 ```
 
-`event_uuid` garante deduplicação. O checkpoint só avança depois do commit das dimensões e fatos. Replay usa o mesmo UUID. Payload inválido ou versão incompatível segue para dead letter com erro explícito.
+Uma linha de `etl_daily_batch` representa uma data de negócio. A chave única
+`(pipeline_name, business_date)` impede duas publicações do mesmo fechamento.
+Cada linha recebida é deduplicada por `(batch_id, source_table, source_key)`.
+O checkpoint por tabela só avança depois da reconciliação, transformação e
+publicação. Uma execução falha pode ser reiniciada; uma execução publicada é
+imutável e retornada de forma idempotente.
+
+O processo externo deve enviar a contagem esperada de todas as fontes
+habilitadas, inclusive zero. Qualquer divergência ou payload rejeitado marca o
+batch como `FAILED` e impede a publicação. O banco nunca publica um dashboard
+parcial como se fosse o fechamento completo.
+
+## Escopo recebido do operacional
+
+`etl_source_contract` é a lista versionada das fontes. A versão inicial cobre
+54 tabelas de negócio de cadastro, catálogo, compras, estoque, PDV, vendas,
+promoções, fidelidade, logística, perdas, reposição e históricos. Fontes
+incrementais usam watermark; `inventory` é recebido como snapshot integral no
+fim do turno para formar `fact_inventory_snapshot`.
+
+São explicitamente excluídos: `app_user`, `customer_auth`, `staff_session`,
+`password_reset_token`, auditoria, logs técnicos, payloads de integração,
+`event_queue` e metadados do legado. O módulo de clientes envia apenas chave
+anônima, ano de nascimento, flags e consentimento. CPF, nome completo, e-mail,
+telefone e endereço detalhado são rejeitados antes de entrar no staging.
+
+## Objetos do batch diário
+
+| Objeto | Responsabilidade |
+|---|---|
+| `etl_pipeline_config` | Horário 02:00, fuso, origem, retenção e habilitação do pipeline |
+| `etl_source_contract` | Allowlist de fontes, ordem, modo de extração, watermark, destino e política de privacidade |
+| `etl_daily_batch` | Estado único do fechamento diário, tentativas, totais e publicação |
+| `stg_operational_row` | Staging idempotente com hash do payload permitido |
+| `etl_rejected_row` | Evidência sem payload bruto para linhas recusadas |
+| `etl_reconciliation` | Comparação entre quantidade operacional esperada e quantidade recebida |
+| `etl_table_checkpoint` | Último batch publicado e watermark por tabela |
+| `vw_etl_daily_batch_health` | Atrasos, duração, contagens, falhas e publicação |
+| `vw_published_batch` | Último fechamento íntegro visível aos dashboards |
+
+Funções do contrato: `fn_begin_daily_batch`, `fn_stage_operational_row`,
+`fn_reconcile_daily_batch`, `fn_mark_daily_batch_transformed`,
+`fn_publish_daily_batch` e `fn_fail_daily_batch`. A limpeza da área de staging
+é feita por `sp_purge_daily_batch_staging` conforme a retenção configurada.
+
+O PostgreSQL não inicia o processo sozinho. Airflow, Render Cron, GitHub
+Actions ou outro orquestrador autorizado deve chamar o pipeline às 02:00. Não
+é necessário nem permitido habilitar `dblink` entre os bancos.
 
 ## Rotas sugeridas para API e BI
 
@@ -92,6 +151,10 @@ Dashboards usam usuário somente leitura e consultam views. Payloads de ingestã
 - Reconciliação diária compara quantidade e valor de vendas por loja/data com o operacional.
 - Snapshots devem fechar com o saldo do estoque operacional.
 - Modelos registram versão, parâmetros, execução, confiança e feedback.
+- `mottainai_analytics_loader` possui escrita sem login e sem DDL; o login real
+  do ETL usa `SET LOCAL ROLE`.
+- `mottainai_analytics_reader` possui somente leitura de dimensões, fatos e
+  views, sem acesso aos payloads de staging.
 
 ## Instalação e manutenção
 
@@ -99,6 +162,24 @@ Dashboards usam usuário somente leitura e consultam views. Payloads de ingestã
 psql -v ON_ERROR_STOP=1 -d mottainai_analytics \
   -f database/analytics/install.sql
 ```
+
+Para uma base analítica já instalada:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_analytics \
+  -f database/analytics/update_existing_daily_batch.sql
+```
+
+Após instalar, associe os logins reais sem versionar credenciais:
+
+```sql
+GRANT mottainai_analytics_loader TO login_real_do_etl;
+GRANT mottainai_analytics_reader TO login_real_do_bi;
+```
+
+O scheduler deve considerar sucesso somente depois de
+`fn_publish_daily_batch`. Se a extração ou transformação falhar, deve chamar
+`fn_fail_daily_batch`, corrigir a causa e reiniciar a mesma data de negócio.
 
 Mensalmente, antes da virada:
 

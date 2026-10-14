@@ -48,3 +48,31 @@ The database does not accept raw CPF, customer documents, customer identity
 values or clear client contact data after module 22. Source backends must apply
 the documented treatment before persistence. See
 `docs/DOCUMENTACAO_BANCO_OPERACIONAL_2026-09-20.md` for the complete contract.
+
+## Analytics database
+
+Install the independent analytics PostgreSQL database with:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_analytics \
+  -f database/analytics/install.sql
+```
+
+Module `12_daily_batch.sql` defines the operational-to-analytics load contract.
+An external scheduler starts it every day at 02:00 in
+`America/Sao_Paulo`, after the previous business day closes. The contract
+provides idempotent staging, source reconciliation, per-table checkpoints,
+privacy rejection, atomic publication and separate loader/reader roles.
+
+For an existing analytics database, run:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_analytics \
+  -f database/analytics/update_existing_daily_batch.sql
+```
+
+The analytics database receives the complete analytical business scope, not a
+physical PostgreSQL replica. Authentication accounts, passwords, sessions,
+recovery tokens, raw integration payloads and unnecessary personal data are
+explicitly excluded. See
+`docs/DOCUMENTACAO_BANCO_ANALITICO_2026-09-20.md` for the complete contract.

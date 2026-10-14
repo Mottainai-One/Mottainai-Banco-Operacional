@@ -13,5 +13,7 @@ BEGIN;
 \ir 08_seed.sql
 \ir 10_dashboard.sql
 \ir 11_priority_views.sql
+\ir 12_daily_batch.sql
 \ir 09_tests.sql
+\ir 13_daily_batch_tests.sql
 COMMIT;
