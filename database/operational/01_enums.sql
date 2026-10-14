@@ -51,7 +51,7 @@ END $$;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'promotion_status') THEN
-        CREATE TYPE promotion_status AS ENUM ('DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'EXPIRED');
+        CREATE TYPE promotion_status AS ENUM ('DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'EXPIRED', 'CANCELLED');
     END IF;
 END $$;
 
@@ -114,7 +114,7 @@ END $$;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'suggested_action_type') THEN
-        CREATE TYPE suggested_action_type AS ENUM ('PROMOTION', 'TRANSFER', 'DONATION', 'DISPOSAL', 'REORDER');
+        CREATE TYPE suggested_action_type AS ENUM ('PROMOTION', 'TRANSFER', 'DONATION', 'DISPOSAL', 'REORDER', 'PURCHASE_ORDER');
     END IF;
 END $$;
 

@@ -35,13 +35,22 @@ jobs:
           cd database/operational
           psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
 
-      - name: Validar reaplicacao do hardening e dados protegidos
+      - name: Validar reaplicacao das migrations incrementais
         env:
           PGPASSWORD: mottainai
         run: |
           cd database/operational
-          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 20_security_hardening.sql
-          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 22_sensitive_data_contract.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f update_existing_api_rpa.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 11_product_company_tests.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 26_api_rpa_compatibility_tests.sql
+
+      - name: Validar reinstalacao com CPF protegido existente
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 27_protected_reinstall_fixture.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
 
       - name: Validar schema criado
         env:

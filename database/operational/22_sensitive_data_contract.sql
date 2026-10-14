@@ -15,6 +15,7 @@ RETURNS BOOLEAN
 LANGUAGE sql
 IMMUTABLE
 STRICT
+SET search_path = pg_catalog
 AS $$
     SELECT p_value ~ ('^' || p_prefix || '_SHA256_[A-Fa-f0-9]{64}$');
 $$;
@@ -24,8 +25,32 @@ RETURNS BOOLEAN
 LANGUAGE sql
 IMMUTABLE
 STRICT
+SET search_path = pg_catalog
 AS $$
     SELECT p_value ~ '^\$2[aby]\$[0-3][0-9]\$[./A-Za-z0-9]{53}$';
+$$;
+
+CREATE OR REPLACE FUNCTION fn_is_legacy_masked_email(p_value TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog
+AS $$
+    SELECT p_value ~* '^EMAIL_[A-Z]+_[0-9]+$'
+        OR p_value ~* '^USER_[0-9]+$'
+        OR p_value ~ '^[A-Za-z0-9._%+-]*\*{3}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$';
+$$;
+
+CREATE OR REPLACE FUNCTION fn_is_legacy_masked_phone(p_value TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog
+AS $$
+    SELECT p_value ~* '^PHONE_[A-Z]+_[0-9]+$'
+        OR p_value ~ '^\([0-9]{2}\) 9\*{4}-[0-9]{4}$';
 $$;
 
 CREATE OR REPLACE FUNCTION fn_is_protected_email(p_value TEXT)
@@ -33,11 +58,10 @@ RETURNS BOOLEAN
 LANGUAGE sql
 IMMUTABLE
 STRICT
+SET search_path = pg_catalog
 AS $$
-    SELECT fn_is_sha256_token(p_value, 'EMAIL')
-        OR p_value ~ '^EMAIL_[A-Z]+_[0-9]+$'
-        OR p_value ~ '^USER_[0-9]+$'
-        OR p_value ~ '^[A-Za-z0-9._%+-]*\*{3}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$';
+    SELECT mottainai.fn_is_sha256_token(p_value, 'EMAIL')
+        OR mottainai.fn_is_legacy_masked_email(p_value);
 $$;
 
 CREATE OR REPLACE FUNCTION fn_is_protected_phone(p_value TEXT)
@@ -45,14 +69,16 @@ RETURNS BOOLEAN
 LANGUAGE sql
 IMMUTABLE
 STRICT
+SET search_path = pg_catalog
 AS $$
-    SELECT fn_is_sha256_token(p_value, 'PHONE')
-        OR p_value ~ '^PHONE_[A-Z]+_[0-9]+$'
-        OR p_value ~ '^\([0-9]{2}\) 9\*{4}-[0-9]{4}$';
+    SELECT mottainai.fn_is_sha256_token(p_value, 'PHONE')
+        OR mottainai.fn_is_legacy_masked_phone(p_value);
 $$;
 
 REVOKE ALL ON FUNCTION fn_is_sha256_token(TEXT, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fn_is_bcrypt_hash(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION fn_is_legacy_masked_email(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION fn_is_legacy_masked_phone(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fn_is_protected_email(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fn_is_protected_phone(TEXT) FROM PUBLIC;
 
@@ -247,12 +273,13 @@ WHERE customer_document IS NOT NULL
 CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = mottainai, pg_temp
 AS $$
 DECLARE
     v_employee_cpf VARCHAR(80);
 BEGIN
     SELECT cpf INTO v_employee_cpf
-    FROM employee
+    FROM mottainai.employee
     WHERE employee_id = NEW.employee_id;
 
     IF v_employee_cpf IS NULL THEN
