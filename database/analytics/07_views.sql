@@ -1,5 +1,15 @@
 SET search_path TO mottainai_analytics, public;
 
+-- Reference date remains fixed until the next successful publication.
+CREATE OR REPLACE VIEW vw_published_batch AS
+SELECT job_id, started_at AS source_cutoff_at,
+       (started_at AT TIME ZONE 'America/Sao_Paulo')::date AS snapshot_date
+FROM job_log
+WHERE job_name = 'operational_to_analytics_daily'
+  AND status::text = 'SUCCEEDED'
+ORDER BY job_id DESC
+LIMIT 1;
+
 CREATE OR REPLACE VIEW vw_sales_daily_kpis AS
 SELECT
     fs.sale_date,
@@ -62,7 +72,8 @@ LEFT JOIN dim_product dp ON dp.product_id = current_stock.product_id
 LEFT JOIN (
     SELECT store_id, product_id, sum(quantity) AS units_sold_30d
     FROM fact_sale_item
-    WHERE sale_date >= current_date - 29
+    CROSS JOIN vw_published_batch b
+    WHERE sale_date BETWEEN b.snapshot_date - 29 AND b.snapshot_date
     GROUP BY store_id, product_id
 ) sales
     ON sales.store_id = current_stock.store_id
