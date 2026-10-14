@@ -29,6 +29,14 @@ BEGIN
         SELECT 1 FROM pg_constraint
         WHERE conname = 'ck_app_user_cpf_valid'
           AND conrelid = 'app_user'::regclass
+    ) AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'app_user'
+          AND column_name = 'cpf'
+          AND data_type = 'character'
+          AND character_maximum_length = 11
     ) THEN
         ALTER TABLE app_user ADD CONSTRAINT ck_app_user_cpf_valid
             CHECK (fn_validate_cpf(cpf));
@@ -38,7 +46,7 @@ END $$;
 CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
 RETURNS TRIGGER AS $$
 DECLARE
-    v_employee_cpf CHAR(11);
+    v_employee_cpf employee.cpf%TYPE;
 BEGIN
     SELECT cpf INTO v_employee_cpf
     FROM employee
@@ -133,6 +141,7 @@ CREATE TABLE IF NOT EXISTS inventory_count_item (
     difference              DECIMAL(12,3) GENERATED ALWAYS AS (counted_quantity - system_quantity) STORED,
     observation             TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at              TIMESTAMPTZ,
     UNIQUE (inventory_count_id, inventory_id)
 );
 

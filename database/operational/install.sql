@@ -17,9 +17,11 @@ BEGIN;
 \ir 08_procedures.sql
 \ir 08_partition_maintenance_fix.sql
 \ir 09_seed.sql
+\ir 10_product_company.sql
 \ir 20_security_hardening.sql
 \ir 22_sensitive_data_contract.sql
 \ir 24_jpa_compatibility.sql
+\ir 25_api_rpa_compatibility.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'

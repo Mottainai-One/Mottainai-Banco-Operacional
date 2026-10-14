@@ -1,6 +1,6 @@
 # Documentação concreta do banco operacional Mottainai
 
-**Versão:** 2026-10-06
+**Versão:** 2026-10-11
 **Database:** `mottainai_operational`
 **Schema:** `mottainai`
 **Finalidade:** servir como fonte transacional oficial para a operação e como contrato de dados para a API.
@@ -67,6 +67,7 @@ O particionamento melhora poda de partições quando a consulta filtra a coluna 
 
 ```text
 company 1---N retail_store 1---N employee 1---1 app_user
+company 1---N product
 retail_store 1---N inventory N---1 batch N---1 product
 supplier 1---N purchase_order 1---N purchase_order_item N---1 product
 purchase_order 1---N receiving 1---N receiving_item 1---N batch
@@ -93,8 +94,34 @@ disposal 1---N disposal_item
 | Promoções | `GET/POST /promotions`, `POST /promotions/{id}/approve` | `promotion`, `promotion_item` |
 | Clientes e fidelidade | `GET/POST /customers`, `GET /customers/{id}/loyalty`, `POST /loyalty/redemptions` | `customer*`, `loyalty_*` |
 | Logística e perdas | `POST /transfers`, `POST /donations`, `POST /disposals`, `POST /replenishments` | `transfer*`, `donation*`, `disposal*`, `replenishment_*` |
+| Monitoramento | `GET /system/events`, `POST /system/events/{id}/retry`, `GET /system/logs`, `GET /system/jobs` | `event_queue`, `system_log`, `error_log`, `job_log` |
 
 As rotas de escrita devem usar transação, idempotency key e controle otimista por `version` quando disponível. Recursos particionados usam a data junto do ID em operações internas porque a PK inclui a chave de partição.
+
+## Contrato de compatibilidade com a API
+
+O módulo `25_api_rpa_compatibility.sql` materializa o contrato usado pela API
+operacional. Ele adiciona exclusão lógica aos itens de contagem e de pedido,
+vincula logs de job à empresa, completa os enums e oferece funções atômicas
+para pedido, recebimento, estoque e idempotência.
+
+| Objeto | Responsabilidade |
+|---|---|
+| `fn_find_outbox_event_by_key` | Recupera o evento já publicado para impedir a repetição de uma operação com a mesma chave. |
+| `fn_api_insert_purchase_order` | Insere pedidos sem esconder a chave temporal da partição da API. |
+| `fn_api_insert_receiving` | Insere o recebimento preservando a referência composta do pedido. |
+| `fn_api_upsert_inventory` | Cria ou reativa o saldo único de loja, lote e tipo. |
+| `fn_atomic_update_inventory` | Atualiza saldo, versão e razão de movimentos de forma atômica. |
+| `vw_api_purchase_order*` | Expõe pedidos e itens, incluindo exclusão lógica. |
+| `vw_api_receiving*` | Expõe recebimentos e seus itens com vínculo ao pedido. |
+| `vw_api_store_product_price` | Expõe o preço vigente por loja e produto. |
+| `vw_api_product*_history` | Expõe históricos protegidos pelo tenant do produto. |
+| `vw_api_system_*` | Expõe eventos, logs e jobs apenas para a empresa autenticada. |
+
+As views usam `security_invoker=true`. Portanto, as consultas continuam
+submetidas ao RLS das tabelas de origem; uma view não amplia o tenant do
+usuário. `job_log.company_id` é opcional somente para compatibilidade com
+registros globais antigos. Esses registros com `NULL` não aparecem na API.
 
 ## Segurança e LGPD
 
@@ -108,7 +135,7 @@ mottainai_api` ao abrir a conexão.
 | Identidade | Senhas e códigos de recuperação usam BCrypt; tokens de sessão usam SHA-256 |
 | Dados pessoais | CPF, documento de venda, UID externo e contatos são armazenados somente em formato tratado |
 | Cliente | A role `mottainai_customer_api` acessa apenas o cliente autenticado e seus próprios dados de fidelidade |
-| RPA | `legacy_sync_record` mantém correlação e SHA-256 do payload, sem armazenar o payload recebido |
+| RPA | `legacy_sync_record` mantém correlação e SHA-256 do payload; `mottainai_migrator` limita o contexto de importação |
 | Sessão | `staff_session` controla expiração, rotação, revogação, IP e dispositivo |
 | Tenant | RLS limita empresa e loja; administrador acessa lojas da própria empresa e demais perfis somente sua loja |
 | Contexto | Funções `SECURITY DEFINER` validam usuário, empresa e loja e usam parâmetros locais à transação |
@@ -151,6 +178,28 @@ SELECT mottainai.fn_bootstrap_customer_context(:external_auth_token);
 COMMIT;
 ```
 
+### Contrato obrigatório da RPA
+
+A RPA executa cada empresa em uma transação e assume a role sem login
+`mottainai_migrator`. O login técnico recebe a associação fora do script
+versionado e nunca recebe `BYPASSRLS`, `SUPERUSER` ou `CREATEROLE`:
+
+```sql
+GRANT mottainai_migrator TO nome_real_do_login_da_rpa;
+
+BEGIN;
+SET LOCAL ROLE mottainai_migrator;
+SELECT mottainai.fn_set_legacy_migration_context(:company_id);
+-- upserts idempotentes da empresa atual
+SELECT mottainai.fn_clear_legacy_migration_context();
+COMMIT;
+```
+
+Durante `legacy-import`, a auditoria continua ativa. Ela grava a empresa,
+identifica a aplicação como `legacy-import` e aceita `user_id = NULL` quando o
+legado não possui uma conta operacional correspondente. Senhas sem BCrypt e
+registros sem vínculo seguro continuam na quarentena da RPA.
+
 ### Responsabilidades de infraestrutura
 
 - exigir TLS com validação do certificado;
@@ -174,6 +223,13 @@ metacomando `\ir` para carregar os módulos em relação ao próprio arquivo.
 Em outra ferramenta de migração, configure a execução dos arquivos na mesma
 ordem declarada pelo instalador.
 
+Em bases existentes, execute os módulos incrementais na ordem
+`10_product_company.sql`, `20_security_hardening.sql`,
+`22_sensitive_data_contract.sql`, `24_jpa_compatibility.sql` e
+`25_api_rpa_compatibility.sql`. Os arquivos `11_product_company_tests.sql` e
+`26_api_rpa_compatibility_tests.sql` pertencem ao CI e não fazem parte do
+instalador de produção.
+
 O script `20_security_hardening.sql` cria a role de grupo `mottainai_api` sem
 login. Após a instalação, um administrador deve associar o login real do
 Render sem colocar credenciais no SQL versionado:
@@ -186,6 +242,13 @@ O hardening de produto pressupõe a migration que adiciona
 `product.company_id`. Em ambientes atualizados fora de ordem, reaplique
 `20_security_hardening.sql` depois da migration de produto para conceder seus
 privilégios protegidos por RLS.
+
+Em uma base já existente, execute `10_product_company.sql`. A migration tenta
+identificar a empresa pelos vínculos do produto com loja, estoque, compra,
+venda, promoção e reposição. Se um produto estiver associado a mais de uma
+empresa, ou não puder ser identificado em uma base com várias empresas, a
+migration interrompe sem adivinhar o proprietário; nesse caso, faça o
+mapeamento explícito e execute novamente.
 
 Mensalmente, executar:
 
@@ -659,6 +722,7 @@ consentimento, sem copiar dados pessoais.
 | `difference` | `DECIMAL(12,3) GENERATED ALWAYS AS (counted_quantity - system_quantity) STORED` | Atributo do domínio desta entidade. |
 | `observation` | `TEXT` | Atributo do domínio desta entidade. |
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` | Data e hora usada para auditoria ou processamento. |
+| `deleted_at` | `TIMESTAMPTZ` | Exclusão lógica; itens apagados podem ser reativados sem violar a unicidade da contagem. |
 
 ### `inventory_movement`
 
@@ -693,11 +757,12 @@ consentimento, sem copiar dados pessoais.
 
 **Por que existe:** Registra execução de rotinas.
 
-**Relacionamentos:** não possui FK declarada nesta tabela.
+**Relacionamentos:** company(company_id).
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
 | `job_id` | `BIGSERIAL PRIMARY KEY` | Identificador ou chave de correlação. |
+| `company_id` | `INTEGER REFERENCES company(company_id) ON DELETE RESTRICT` | Empresa proprietária do job; registros legados globais podem permanecer nulos e ficam ocultos da API. |
 | `job_name` | `VARCHAR(100) NOT NULL` | Atributo do domínio desta entidade. |
 | `job_type` | `VARCHAR(50)` | Atributo do domínio desta entidade. |
 | `start_time` | `TIMESTAMP NOT NULL` | Atributo do domínio desta entidade. |
@@ -912,17 +977,20 @@ entre bancos físicos independentes.
 
 ### `product`
 
-**Por que existe:** Mantém o cadastro mestre do SKU.
+**Por que existe:** Mantém o cadastro mestre do SKU dentro da empresa proprietária. A empresa é a fronteira de isolamento do catálogo: uma empresa possui vários produtos e cada produto pertence obrigatoriamente a uma única empresa.
 
-**Relacionamentos:** product_category(category_id), tax_profile(tax_profile_id).
+**Relacionamentos:** company(company_id), product_category(category_id), tax_profile(tax_profile_id). A exclusão da empresa é restrita enquanto houver produtos associados.
+
+**Isolamento e unicidade:** a política RLS `product_policy` permite leitura e escrita somente quando `product.company_id` coincide com `app.current_company_id`. SKU e código de barras são únicos dentro de cada empresa, permitindo que empresas diferentes cadastrem os mesmos valores.
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
 | `product_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
+| `company_id` | `INTEGER NOT NULL REFERENCES company(company_id) ON DELETE RESTRICT` | Empresa proprietária do produto e chave de isolamento multiempresa. |
 | `category_id` | `INTEGER NOT NULL REFERENCES product_category(category_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
 | `tax_profile_id` | `INTEGER NOT NULL REFERENCES tax_profile(tax_profile_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
-| `sku` | `VARCHAR(50) NOT NULL UNIQUE` | Atributo do domínio desta entidade. |
-| `barcode` | `VARCHAR(30) NOT NULL UNIQUE` | Atributo do domínio desta entidade. |
+| `sku` | `VARCHAR(50) NOT NULL` | Identificador interno único por empresa por meio de `UNIQUE (company_id, sku)`. |
+| `barcode` | `VARCHAR(30) NOT NULL` | Código de barras único por empresa por meio de `UNIQUE (company_id, barcode)`. |
 | `ncm` | `VARCHAR(8) NOT NULL CHECK (ncm ~ '^\d{8}$')` | Atributo do domínio desta entidade. |
 | `cest` | `VARCHAR(7) CHECK (cest IS NULL OR cest ~ '^\d{7}$')` | Atributo do domínio desta entidade. |
 | `name` | `VARCHAR(150) NOT NULL` | Atributo do domínio desta entidade. |
@@ -1066,6 +1134,7 @@ entre bancos físicos independentes.
 | `subtotal` | `DECIMAL(12,2) GENERATED ALWAYS AS (requested_quantity * unit_price) STORED` | Valor monetário ou medida financeira. |
 | `order_date` | `TIMESTAMP NOT NULL` | Data de negócio e possível filtro temporal. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
+| `deleted_at` | `TIMESTAMP` | Exclusão lógica usada pelas consultas de pedido e recebimento. |
 
 ### `receiving`
 
