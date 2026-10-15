@@ -33,6 +33,6 @@ docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml -f q
 docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
 ```
 
-No uso local, a API fica em `http://localhost:18080`. Verifique `http://localhost:18080/actuator/health` e `http://localhost:18080/swagger-ui.html`. Para o servidor compartilhado, omita os dois arquivos `*.local.yaml`: nem PostgreSQL nem API terão uma porta publicada diretamente. A futura configuração HTTPS será a única entrada pública.
+No uso local, a API fica em `http://localhost:18080`. Verifique `http://localhost:18080/actuator/health` e `http://localhost:18080/swagger-ui.html`. Os e-mails de teste ficam no Mailpit em `http://localhost:18025`; o SMTP de QA é interno à rede Docker e não envia mensagens para destinatários reais. Para o servidor compartilhado, omita os dois arquivos `*.local.yaml`: PostgreSQL, API e Mailpit não terão portas publicadas diretamente. A futura configuração HTTPS será a única entrada pública.
 
 Esta etapa verifica que a API inicia contra o esquema operacional de QA e serve health/OpenAPI. Ela não substitui os testes unitários da API nem os cenários completos de negócio, que devem permanecer visíveis na CI. O serviço de IA e a URL compartilhada virão em etapas seguintes.

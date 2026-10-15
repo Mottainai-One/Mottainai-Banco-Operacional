@@ -8,18 +8,28 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/mottainai_qa
       DB_USER: mottainai_qa_app
       DB_PASSWORD: ${QA_DB_APP_PASSWORD:?Set QA_DB_APP_PASSWORD in qa/.env}
       JWT_SECRET: ${QA_JWT_SECRET:?Set QA_JWT_SECRET in qa/.env}
       SPRING_FLYWAY_ENABLED: "false"
+      SPRING_PROFILES_ACTIVE: qa
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 15s
       timeout: 5s
       retries: 20
       start_period: 60s
+    networks:
+      - qa_internal
+      - qa_edge
+
+  mailpit:
+    image: axllent/mailpit:v1.27.3
+    restart: unless-stopped
     networks:
       - qa_internal
       - qa_edge
