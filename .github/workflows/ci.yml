@@ -337,3 +337,30 @@ jobs:
           sqlfluff lint script/0[0-9]_*.sql script/10_tests.sql script/dataLoad.sql \
             --config /tmp/sqlfluff-full.ini --ignore parsing || true
           echo "Job informativo - nao bloqueia o merge"
+
+  qa-postgres-bootstrap:
+    name: 9. Inicializar PostgreSQL de QA com Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Criar senhas descartaveis para o teste
+        run: |
+          umask 077
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\n' \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > qa/.env
+
+      - name: Validar Compose e instalar schema de QA
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml up -d --wait postgres
+          docker compose --env-file qa/.env -f qa/compose.yaml --profile verify run --rm verify
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml logs --no-color postgres
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml down --volumes
