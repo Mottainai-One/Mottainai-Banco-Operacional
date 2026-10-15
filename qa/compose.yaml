@@ -15,7 +15,13 @@ services:
       - ./init:/docker-entrypoint-initdb.d:ro
       - ./app-role.sql:/qa/app-role.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U qa_admin -d mottainai_qa"]
+      test:
+        - CMD-SHELL
+        - >-
+          psql -U qa_admin -d mottainai_qa -tAc
+          "SELECT to_regclass('mottainai.company') IS NOT NULL
+          AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mottainai_qa_app')"
+          | grep -qx t
       interval: 10s
       timeout: 5s
       retries: 12

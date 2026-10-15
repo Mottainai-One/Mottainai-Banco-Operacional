@@ -21,3 +21,18 @@ O instalador do PostgreSQL só executa os scripts em `/docker-entrypoint-initdb.
 - Nenhuma senha real ou dado operacional é versionado.
 
 O QA completo ainda requer a API Spring, a IA, os testes de integração e um servidor acessível à equipe.
+
+## Etapa 2: API Spring com o banco de QA
+
+Clone `Mottainai-Spring-Api-SQL` ao lado deste repositório. Enquanto a PR da imagem da API não for integrada, use a branch `feature/qa-api-container`; depois use `main`. Acrescente `QA_JWT_SECRET` ao `qa/.env` com um segredo Base64 gerado a partir de pelo menos 32 bytes aleatórios. Não publique esse arquivo.
+
+Na raiz deste repositório, suba e valide os serviços:
+
+```bash
+docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml -f qa/compose.local.yaml -f qa/compose.api.local.yaml up -d --build api
+docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
+```
+
+No uso local, a API fica em `http://localhost:18080`. Verifique `http://localhost:18080/actuator/health` e `http://localhost:18080/swagger-ui.html`. Para o servidor compartilhado, omita os dois arquivos `*.local.yaml`: nem PostgreSQL nem API terão uma porta publicada diretamente. A futura configuração HTTPS será a única entrada pública.
+
+Esta etapa verifica que a API inicia contra o esquema operacional de QA e serve health/OpenAPI. Ela não substitui os testes unitários da API nem os cenários completos de negócio, que devem permanecer visíveis na CI. O serviço de IA e a URL compartilhada virão em etapas seguintes.

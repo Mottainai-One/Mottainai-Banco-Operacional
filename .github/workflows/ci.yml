@@ -364,3 +364,36 @@ jobs:
       - name: Encerrar contêineres descartaveis
         if: always()
         run: docker compose --env-file qa/.env -f qa/compose.yaml down --volumes
+
+  qa-api-integration:
+    name: 10. API Spring conectada ao PostgreSQL de QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Mottainai-One/Mottainai-Spring-Api-SQL
+          ref: feature/qa-api-container
+          path: api
+
+      - name: Criar segredos descartaveis para o teste
+        run: |
+          umask 077
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nQA_API_BUILD_CONTEXT=../api\n' \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
+            "$(openssl rand -base64 48 | tr -d '\n')" > qa/.env
+
+      - name: Construir API e validar conexao com banco
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml up -d --wait --build api
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml logs --no-color postgres api
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml down --volumes
