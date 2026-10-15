@@ -11,4 +11,4 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
 
 psql -v ON_ERROR_STOP=1 -v qa_app_password="$QA_DB_APP_PASSWORD" \
   --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
-  -f /docker-entrypoint-initdb.d/20-app-role.sql
+  -f /qa/app-role.sql
