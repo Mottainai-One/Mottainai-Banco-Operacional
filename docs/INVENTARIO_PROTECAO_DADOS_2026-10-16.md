@@ -1,7 +1,9 @@
 # Inventário de hash, anonimização e criptografia
 
-**Versão:** 2026-10-16  
-**Escopo:** bancos PostgreSQL operacional e analítico do Mottainai  
+**Versão:** 2026-10-16
+
+**Escopo:** bancos PostgreSQL operacional e analítico do Mottainai
+
 **Objetivo:** indicar onde cada dado protegido é armazenado, qual tratamento é
 aplicado e se o valor pode ser recuperado.
 
@@ -24,8 +26,10 @@ devem ser armazenadas no PostgreSQL.
 
 ## Banco operacional
 
-**Nome usado na máquina:** `MOTTAINAI`  
-**Nome lógico documentado:** `mottainai_operational`  
+**Nome usado na máquina:** `MOTTAINAI`
+
+**Nome lógico documentado:** `mottainai_operational`
+
 **Schema:** `mottainai`
 
 ### Identidade de funcionários
@@ -111,8 +115,10 @@ com acesso restrito e não são replicados para analytics.
 
 ## Banco analítico
 
-**Nome usado na máquina:** `MOTTAINAI_ANALITICO`  
-**Nome lógico documentado:** `mottainai_analytics`  
+**Nome usado na máquina:** `MOTTAINAI_ANALITICO`
+
+**Nome lógico documentado:** `mottainai_analytics`
+
 **Schema:** `mottainai_analytics`
 
 ### Campos armazenados com proteção
