@@ -7,7 +7,19 @@
 -- ====================================================================
 
 -- Índices Únicos
-CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_cpf_global ON employee(cpf) WHERE active = true AND deleted_at IS NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai' AND table_name = 'employee'
+          AND column_name = 'cpf'
+    ) THEN
+        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_cpf_global '
+             || 'ON employee(cpf) WHERE active = true AND deleted_at IS NULL';
+    ELSE
+        DROP INDEX IF EXISTS idx_unique_cpf_global;
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_cnpj_global ON supplier(cnpj) WHERE active = true AND deleted_at IS NULL;
 
 -- Índices Parciais - APENAS COM COLUNAS, SEM FUNÇÕES

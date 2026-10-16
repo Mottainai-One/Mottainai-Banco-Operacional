@@ -24,10 +24,10 @@ sensitive-data contract and API/RPA compatibility:
 - `25_api_rpa_compatibility.sql`: API views/functions, missing soft-delete
   columns, enum values, tenant monitoring and controlled legacy-import context.
 - `28_reversible_employee_pii.sql`: transition table for AES-256-GCM employee
-  identity envelopes, HMAC blind indexes and masked display values;
+  name, CPF, email and phone envelopes plus masked display values;
 - `29_finalize_reversible_employee_pii.sql`: fail-closed removal of employee
-  name/contact columns and `app_user.email` after encrypted backfill and
-  Firebase UID validation.
+  identity columns after encrypted backfill; active accounts require Firebase
+  UID, while pending invitations may keep it null.
 
 For a **database already installed locally**, run the incremental update instead
 of reinstalling the entire schema:
@@ -57,8 +57,9 @@ the documented treatment before persistence. See
 Existing databases must run `prepare_existing_reversible_pii.sql`, allow the
 authorized backend/RPA to backfill every AES-GCM envelope, and only then run
 `finalize_existing_reversible_pii.sql`. The finalizer refuses to drop legacy
-columns when any envelope or Firebase UID is missing. Encryption and HMAC keys
-must stay in an external KMS/secret vault and are never stored in PostgreSQL.
+columns when any required envelope or active-account Firebase UID is missing.
+Encryption keys must stay in an external KMS/secret vault and are never stored
+in PostgreSQL.
 
 ## Analytics database
 

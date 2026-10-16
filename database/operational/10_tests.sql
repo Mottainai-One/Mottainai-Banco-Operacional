@@ -33,14 +33,22 @@ BEGIN
         RAISE EXCEPTION 'Column product.base_price required by the API is missing';
     END IF;
 
-    IF NOT EXISTS (
+    IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'mottainai'
           AND table_name = 'app_user'
           AND column_name = 'cpf'
-          AND is_nullable = 'NO'
     ) THEN
-        RAISE EXCEPTION 'Column app_user.cpf is missing or nullable';
+        RAISE EXCEPTION 'Legacy app_user.cpf must be removed after AES-GCM finalization';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee_private_data'
+          AND column_name = 'cpf_ciphertext'
+    ) THEN
+        RAISE EXCEPTION 'employee_private_data.cpf_ciphertext is missing';
     END IF;
 
     IF (

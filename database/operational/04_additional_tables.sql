@@ -1,90 +1,64 @@
 SET search_path TO mottainai, public;
 
--- O funcionario ja possui CPF. A conta de acesso tambem recebe o campo por
--- requisito da API, mas ele e preenchido a partir de employee para evitar
--- divergencia entre as duas copias do dado pessoal.
-ALTER TABLE app_user
-    ADD COLUMN IF NOT EXISTS cpf CHAR(11);
-
-UPDATE app_user app
-SET cpf = employee.cpf
-FROM employee
-WHERE employee.employee_id = app.employee_id
-  AND app.cpf IS DISTINCT FROM employee.cpf;
-
-ALTER TABLE app_user
-    ALTER COLUMN cpf SET NOT NULL;
-
+-- Legacy compatibility for a first installation. After module 29 finalizes
+-- AES-GCM identity storage, neither table has a CPF column and reinstallation
+-- must not recreate it.
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'uq_app_user_cpf'
-          AND conrelid = 'app_user'::regclass
-    ) THEN
-        ALTER TABLE app_user ADD CONSTRAINT uq_app_user_cpf UNIQUE (cpf);
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'ck_app_user_cpf_valid'
-          AND conrelid = 'app_user'::regclass
-    ) AND EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'mottainai'
-          AND table_name = 'app_user'
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai' AND table_name = 'employee'
           AND column_name = 'cpf'
-          AND data_type = 'character'
-          AND character_maximum_length = 11
     ) THEN
-        ALTER TABLE app_user ADD CONSTRAINT ck_app_user_cpf_valid
-            CHECK (fn_validate_cpf(cpf));
+        ALTER TABLE app_user ADD COLUMN IF NOT EXISTS cpf CHAR(11);
+        EXECUTE 'UPDATE app_user app SET cpf = employee.cpf FROM employee '
+             || 'WHERE employee.employee_id = app.employee_id '
+             || 'AND app.cpf IS DISTINCT FROM employee.cpf';
+        ALTER TABLE app_user ALTER COLUMN cpf SET NOT NULL;
+
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'uq_app_user_cpf' AND conrelid = 'app_user'::regclass
+        ) THEN
+            ALTER TABLE app_user ADD CONSTRAINT uq_app_user_cpf UNIQUE (cpf);
+        END IF;
+
+        EXECUTE $fn$
+            CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $body$
+            DECLARE v_employee_cpf VARCHAR(80);
+            BEGIN
+                SELECT cpf INTO v_employee_cpf FROM employee
+                WHERE employee_id = NEW.employee_id;
+                IF v_employee_cpf IS NULL THEN
+                    RAISE EXCEPTION 'Employee % does not exist or has no CPF', NEW.employee_id;
+                END IF;
+                IF TG_OP = 'INSERT' AND NEW.cpf IS NULL THEN
+                    NEW.cpf := v_employee_cpf;
+                ELSIF NEW.cpf IS DISTINCT FROM v_employee_cpf THEN
+                    RAISE EXCEPTION 'app_user.cpf must match employee.cpf';
+                END IF;
+                RETURN NEW;
+            END $body$
+        $fn$;
+        EXECUTE 'DROP TRIGGER IF EXISTS trg_sync_app_user_cpf ON app_user';
+        EXECUTE 'CREATE TRIGGER trg_sync_app_user_cpf BEFORE INSERT OR UPDATE OF employee_id, cpf '
+             || 'ON app_user FOR EACH ROW EXECUTE FUNCTION fn_sync_app_user_cpf()';
+
+        EXECUTE $fn$
+            CREATE OR REPLACE FUNCTION fn_propagate_employee_cpf()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $body$
+            BEGIN
+                UPDATE app_user SET cpf = NEW.cpf WHERE employee_id = NEW.employee_id;
+                RETURN NEW;
+            END $body$
+        $fn$;
+        EXECUTE 'DROP TRIGGER IF EXISTS trg_propagate_employee_cpf ON employee';
+        EXECUTE 'CREATE TRIGGER trg_propagate_employee_cpf AFTER UPDATE OF cpf ON employee '
+             || 'FOR EACH ROW WHEN (OLD.cpf IS DISTINCT FROM NEW.cpf) '
+             || 'EXECUTE FUNCTION fn_propagate_employee_cpf()';
     END IF;
 END $$;
-
-CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_employee_cpf employee.cpf%TYPE;
-BEGIN
-    SELECT cpf INTO v_employee_cpf
-    FROM employee
-    WHERE employee_id = NEW.employee_id;
-
-    IF v_employee_cpf IS NULL THEN
-        RAISE EXCEPTION 'Employee % does not exist or has no CPF', NEW.employee_id;
-    END IF;
-
-    IF TG_OP = 'INSERT' AND NEW.cpf IS NULL THEN
-        NEW.cpf := v_employee_cpf;
-    ELSIF NEW.cpf IS DISTINCT FROM v_employee_cpf THEN
-        RAISE EXCEPTION 'app_user.cpf must match employee.cpf';
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_sync_app_user_cpf ON app_user;
-CREATE TRIGGER trg_sync_app_user_cpf
-BEFORE INSERT OR UPDATE OF employee_id, cpf ON app_user
-FOR EACH ROW EXECUTE FUNCTION fn_sync_app_user_cpf();
-
-CREATE OR REPLACE FUNCTION fn_propagate_employee_cpf()
-RETURNS TRIGGER AS $$
-BEGIN
-    UPDATE app_user SET cpf = NEW.cpf WHERE employee_id = NEW.employee_id;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_propagate_employee_cpf ON employee;
-CREATE TRIGGER trg_propagate_employee_cpf
-AFTER UPDATE OF cpf ON employee
-FOR EACH ROW
-WHEN (OLD.cpf IS DISTINCT FROM NEW.cpf)
-EXECUTE FUNCTION fn_propagate_employee_cpf();
 
 -- Campo exigido pelo contrato atual da API. O preco efetivo por loja fica
 -- versionado em store_product_price; base_price e o valor-base do cadastro.
