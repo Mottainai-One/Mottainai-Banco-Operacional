@@ -154,7 +154,7 @@ DECLARE
     v_company_id INTEGER;
     v_store_id INTEGER;
 BEGIN
-    IF p_lookup NOT IN ('CPF', 'EMAIL', 'INVITED_CPF') THEN
+    IF p_lookup NOT IN ('CPF', 'FIREBASE_UID', 'INVITED_CPF') THEN
         RETURN FALSE;
     END IF;
 
@@ -176,7 +176,8 @@ BEGIN
       AND (
           (p_lookup = 'CPF' AND u.cpf = p_identity AND u.active AND e.active)
           OR
-          (p_lookup = 'EMAIL' AND lower(u.email) = lower(p_identity) AND u.active AND e.active)
+          (p_lookup = 'FIREBASE_UID' AND u.firebase_uid = p_identity
+              AND u.active AND e.active)
           OR
           (p_lookup = 'INVITED_CPF' AND u.cpf = p_identity
               AND NOT u.active AND NOT e.active AND NOT u.password_set)
