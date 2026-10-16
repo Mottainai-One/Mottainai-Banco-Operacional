@@ -1,6 +1,6 @@
 # Documentação concreta do banco analítico Mottainai
 
-**Versão:** 2026-10-14
+**Versão:** 2026-10-16
 **Database:** `mottainai_analytics`
 **Schema:** `mottainai_analytics`
 **Finalidade:** sustentar BI, histórico, indicadores, previsões e recomendações sem disputar recursos com o banco operacional.
@@ -99,11 +99,15 @@ promoções, fidelidade, logística, perdas, reposição e históricos. Fontes
 incrementais usam watermark; `inventory` é recebido como snapshot integral no
 fim do turno para formar `fact_inventory_snapshot`.
 
-São explicitamente excluídos: `app_user`, `customer_auth`, `staff_session`,
+São explicitamente excluídos: `employee_private_data`, `app_user`,
+`customer_auth`, `staff_session`,
 `password_reset_token`, auditoria, logs técnicos, payloads de integração,
 `event_queue` e metadados do legado. O módulo de clientes envia apenas chave
 anônima, ano de nascimento, flags e consentimento. CPF, nome completo, e-mail,
-telefone e endereço detalhado são rejeitados antes de entrar no staging.
+telefone e endereço detalhado são rejeitados antes de entrar no staging. O
+filtro também rejeita ciphertexts, nonces, HMACs, máscaras e versões de chave:
+o banco analítico não é cofre, não recebe chaves e não pode reidentificar um
+funcionário.
 
 ## Objetos do batch diário
 
@@ -146,7 +150,9 @@ Dashboards usam usuário somente leitura e consultam views. Payloads de ingestã
 
 - `dim_customer` não contém CPF, nome, e-mail ou telefone.
 - `anonymous_key` é o identificador de exposição analítica.
-- `dim_employee` não replica CPF.
+- `dim_employee` não replica CPF, nome, e-mail ou telefone.
+- `employee_private_data` tem contrato `EXCLUDED`; mesmo envelopes cifrados e
+  valores mascarados são bloqueados pela validação recursiva do staging.
 - Cada fato tem grão explícito para impedir duplicidade de medidas.
 - Reconciliação diária compara quantidade e valor de vendas por loja/data com o operacional.
 - Snapshots devem fechar com o saldo do estoque operacional.
