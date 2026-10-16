@@ -105,7 +105,8 @@ São explicitamente excluídos: `employee_private_data`, `app_user`,
 `event_queue` e metadados do legado. O módulo de clientes envia apenas chave
 anônima, ano de nascimento, flags e consentimento. CPF, nome completo, e-mail,
 telefone e endereço detalhado são rejeitados antes de entrar no staging. O
-filtro também rejeita ciphertexts, nonces, HMACs, máscaras e versões de chave:
+filtro também rejeita ciphertexts, nonces, máscaras, versões de chave e nomes
+de tokens legados mantidos na lista de bloqueio por defesa em profundidade:
 o banco analítico não é cofre, não recebe chaves e não pode reidentificar um
 funcionário.
 

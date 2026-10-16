@@ -51,6 +51,8 @@ BEGIN
         '{"employee_id":1,"name_ciphertext":"secret"}'::jsonb
     ) OR NOT fn_payload_has_forbidden_key(
         '{"employee_id":1,"email_masked":"a***@example.com"}'::jsonb
+    ) OR NOT fn_payload_has_forbidden_key(
+        '{"employee_id":1,"cpf_ciphertext":"secret"}'::jsonb
     ) THEN
         RAISE EXCEPTION 'Encrypted or masked identity fields are not blocked from analytics';
     END IF;

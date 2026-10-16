@@ -150,55 +150,58 @@ AS $$
         OR mottainai.fn_is_legacy_masked_phone(p_value);
 $$;
 
-CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SET search_path = mottainai, pg_temp
-AS $$
-DECLARE
-    v_employee_cpf VARCHAR(80);
+DO $$
 BEGIN
-    SELECT employee.cpf
-    INTO v_employee_cpf
-    FROM mottainai.employee
-    WHERE employee.employee_id = NEW.employee_id;
-
-    IF v_employee_cpf IS NULL THEN
-        RAISE EXCEPTION
-            'Employee % does not exist or has no protected CPF token',
-            NEW.employee_id;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'employee' AND column_name = 'cpf')
+       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'app_user' AND column_name = 'cpf') THEN
+        EXECUTE $fn$
+            CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
+            RETURNS TRIGGER LANGUAGE plpgsql SET search_path = mottainai, pg_temp
+            AS $body$
+            DECLARE v_employee_cpf VARCHAR(80);
+            BEGIN
+                SELECT employee.cpf INTO v_employee_cpf FROM mottainai.employee
+                WHERE employee.employee_id = NEW.employee_id;
+                IF v_employee_cpf IS NULL THEN
+                    RAISE EXCEPTION 'Employee % does not exist or has no protected CPF token', NEW.employee_id;
+                END IF;
+                IF TG_OP = 'INSERT' AND NEW.cpf IS NULL THEN
+                    NEW.cpf := v_employee_cpf;
+                ELSIF NEW.cpf IS DISTINCT FROM v_employee_cpf THEN
+                    RAISE EXCEPTION 'app_user.cpf must match the protected employee CPF token';
+                END IF;
+                RETURN NEW;
+            END $body$
+        $fn$;
+        EXECUTE $fn$
+            CREATE OR REPLACE FUNCTION fn_propagate_employee_cpf()
+            RETURNS TRIGGER LANGUAGE plpgsql SET search_path = mottainai, pg_temp
+            AS $body$
+            BEGIN
+                UPDATE mottainai.app_user SET cpf = NEW.cpf
+                WHERE employee_id = NEW.employee_id;
+                RETURN NEW;
+            END $body$
+        $fn$;
+    ELSE
+        DROP FUNCTION IF EXISTS fn_sync_app_user_cpf();
+        DROP FUNCTION IF EXISTS fn_propagate_employee_cpf();
     END IF;
-
-    IF TG_OP = 'INSERT' AND NEW.cpf IS NULL THEN
-        NEW.cpf := v_employee_cpf;
-    ELSIF NEW.cpf IS DISTINCT FROM v_employee_cpf THEN
-        RAISE EXCEPTION
-            'app_user.cpf must match the protected employee CPF token';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION fn_propagate_employee_cpf()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SET search_path = mottainai, pg_temp
-AS $$
-BEGIN
-    UPDATE mottainai.app_user
-    SET cpf = NEW.cpf
-    WHERE employee_id = NEW.employee_id;
-    RETURN NEW;
-END;
-$$;
+END $$;
 
 REVOKE ALL ON FUNCTION fn_is_legacy_masked_email(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fn_is_legacy_masked_phone(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fn_is_protected_email(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fn_is_protected_phone(TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION fn_sync_app_user_cpf() FROM PUBLIC;
-REVOKE ALL ON FUNCTION fn_propagate_employee_cpf() FROM PUBLIC;
+DO $$
+BEGIN
+    IF to_regprocedure('mottainai.fn_sync_app_user_cpf()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION fn_sync_app_user_cpf() FROM PUBLIC;
+    END IF;
+    IF to_regprocedure('mottainai.fn_propagate_employee_cpf()') IS NOT NULL THEN
+        REVOKE ALL ON FUNCTION fn_propagate_employee_cpf() FROM PUBLIC;
+    END IF;
+END $$;
 
 -- Dedicated, non-login role for controlled legacy imports. The actual RPA
 -- login must receive membership through an out-of-band administrator action.

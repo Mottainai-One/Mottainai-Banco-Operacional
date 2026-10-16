@@ -30,29 +30,28 @@ Os scripts instaláveis ficam exclusivamente em `database/operational`. Esta doc
 
 O banco operacional segue o mesmo conceito acordado para o banco legado. O
 backend de origem trata o dado antes da persistência e o PostgreSQL valida o
-formato recebido. CPF, documento de venda e identificadores externos usam
-tokens SHA-256 prefixados; senhas e códigos de recuperação de baixa entropia
-usam BCrypt. Nome, e-mail e telefone do funcionário usam criptografia
-reversível autenticada AES-256-GCM, índice cego HMAC-SHA-256 e valor mascarado.
+formato recebido. Documento de venda e identificadores externos usam tokens
+SHA-256 prefixados; senhas e códigos de recuperação de baixa entropia usam
+BCrypt. Nome, CPF, e-mail e telefone do funcionário usam criptografia
+reversível autenticada AES-256-GCM e valor mascarado. A decisão final não usa
+HMAC nem índice cego nesses quatro campos.
 
-`employee.cpf` é o token principal e permanece único. `app_user.cpf` é uma
-cópia controlada por triggers e nunca contém o CPF original. Para manter o RPA
-compatível, o banco aceita tanto `CPF_TKN_XXXXXX`, definido pelo legado, quanto
-`CPF_SHA256_` seguido de 64 caracteres hexadecimais. Dados novos devem usar o
-formato SHA-256.
+Após a finalização, `employee` e `app_user` não guardam CPF. O CPF cifrado fica
+somente em `employee_private_data`, junto do nonce e da versão da chave. A API
+não faz busca por CPF ou e-mail: contas ativas são localizadas pelo
+`firebase_uid`, e convites pendentes pelo token de convite.
 
 O módulo de clientes não passa pelo legado, mas segue o mesmo princípio. Nome,
 CPF, e-mail, telefone e UID externo chegam tokenizados. A data de nascimento é
 reduzida para `birth_year`, e o endereço residencial é representado somente por
 `address_token`; não há vínculo com o endereço operacional de lojas.
 
-As chaves AES e HMAC ficam exclusivamente em KMS/secret manager, com versão e
+As chaves AES ficam exclusivamente em KMS/secret manager, com versão e
 rotação; não são gravadas nem recebidas por função do PostgreSQL. Somente um
 serviço autorizado pode abrir o envelope. AES-GCM garante confidencialidade e
-autenticidade, enquanto o HMAC permite igualdade sem descriptografar. Nonces de
-96 bits devem ser aleatórios e jamais reutilizados com a mesma chave. Para CPF
-e demais identificadores ainda irreversíveis, o backend usa token com segredo
-do ambiente. Mascaramento é apenas apresentação e nunca substitui criptografia.
+autenticidade. Nonces de 96 bits devem ser aleatórios e jamais reutilizados com
+a mesma chave. Mascaramento é apenas apresentação e nunca substitui
+criptografia.
 
 ## Particionamento mensal
 
@@ -138,8 +137,8 @@ mottainai_api` ao abrir a conexão.
 | Camada | Controle aplicado |
 |---|---|
 | Identidade | Login do funcionário usa `firebase_uid`; senhas e códigos de recuperação usam BCrypt; tokens de sessão usam SHA-256 |
-| Dados pessoais | Nome, e-mail e telefone do funcionário usam AES-256-GCM + HMAC; CPF, documento de venda e outros identificadores permanecem tokenizados |
-| Chaves | Chaves AES/HMAC ficam fora do banco, em KMS/secret manager, com menor privilégio, versão, auditoria e rotação |
+| Dados pessoais | Nome, CPF, e-mail e telefone do funcionário usam AES-256-GCM; documento de venda e identificadores não recuperáveis permanecem tokenizados |
+| Chaves | Chaves AES ficam fora do banco, em KMS/secret manager, com menor privilégio, versão, auditoria e rotação |
 | Cliente | A role `mottainai_customer_api` acessa apenas o cliente autenticado e seus próprios dados de fidelidade |
 | RPA | `legacy_sync_record` mantém correlação e SHA-256 do payload; `mottainai_migrator` limita o contexto de importação |
 | Sessão | `staff_session` controla expiração, rotação, revogação, IP e dispositivo |
@@ -157,8 +156,9 @@ mottainai_api` ao abrir a conexão.
 
 Cada requisição autenticada deve executar dentro de uma transação. A API
 valida a senha com BCrypt antes de inicializar o contexto no banco. O bootstrap
-aceita `FIREBASE_UID`, `CPF` ou `INVITED_CPF`; e-mail não é identidade de
-autenticação. Nome e contatos só podem ser abertos por serviço autorizado, que
+aceita somente `FIREBASE_UID`; e-mail e CPF não são identidades de autenticação.
+Convites pendentes usam `fn_bootstrap_staff_context_by_token`. Nome, CPF e
+contatos só podem ser abertos por serviço autorizado, que
 lê o envelope e usa a chave externa ao PostgreSQL:
 
 ```sql
@@ -214,8 +214,7 @@ registros sem vínculo seguro continuam na quarentena da RPA.
 - manter credenciais no secret manager do ambiente, nunca no repositório;
 - usar BCrypt com custo revisado para senhas e códigos de recuperação;
 - gerar tokens SHA-256 no backend e manter o segredo fora do banco;
-- criptografar nome, e-mail e telefone de funcionário com AES-256-GCM no serviço autorizado;
-- gerar HMAC-SHA-256 versionado com chave distinta da chave AES para buscas por igualdade;
+- criptografar nome, CPF, e-mail e telefone de funcionário com AES-256-GCM no serviço autorizado;
 - manter chaves no KMS/secret manager, registrar acessos e testar rotação e recuperação;
 - ativar backups criptografados, recuperação ponto no tempo e teste periódico de restauração;
 - monitorar tentativas de login, falhas de RLS, revogações e alterações de privilégio;
@@ -240,15 +239,16 @@ Em bases existentes, execute os módulos incrementais na ordem
 `25_api_rpa_compatibility.sql`. Depois, a alteração de PII ocorre em duas
 entregas independentes:
 
-1. Execute `prepare_existing_reversible_pii.sql` para criar o cofre e preservar
-   os tokens legados como estado transitório.
+1. Execute `prepare_existing_reversible_pii.sql` para criar o cofre e marcar os
+   registros legados como estado transitório.
 2. Atualize API/RPA para criptografar valores vindos da fonte original com
-   AES-256-GCM, gerar HMAC e preencher `employee_private_data`. Um SHA-256
+   AES-256-GCM e preencher `employee_private_data`. Um SHA-256
    existente não pode ser descriptografado nem convertido em ciphertext.
-3. Preencha `app_user.firebase_uid` para todas as contas.
+3. Preencha `app_user.firebase_uid` para todas as contas ativas. Convites
+   pendentes podem permanecer sem UID.
 4. Execute `finalize_existing_reversible_pii.sql`. O preflight falha sem apagar
    nada se qualquer envelope ou UID estiver incompleto; somente então remove
-   `employee.name/email/phone` e `app_user.email`.
+   `employee.name/cpf/email/phone` e `app_user.cpf/email`.
 
 Faça backup e teste restauração antes da finalização. Os arquivos
 `11_product_company_tests.sql` e
@@ -337,8 +337,7 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 |---|---|---|
 | `user_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `employee_id` | `INTEGER NOT NULL UNIQUE REFERENCES employee(employee_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
-| `cpf` | `VARCHAR(80) NOT NULL UNIQUE` | Token sincronizado com `employee.cpf`; nunca contém o CPF aberto. |
-| `firebase_uid` | `VARCHAR(255) NOT NULL UNIQUE` | Identidade externa primária usada na autenticação; o e-mail não fica nesta tabela. |
+| `firebase_uid` | `VARCHAR(255) UNIQUE` | Identidade externa primária. É obrigatória para conta ativa e nula durante convite pendente. |
 | `password_hash` | `VARCHAR(255) NOT NULL` | Hash criptográfico; o valor original não é persistido. |
 | `password_set` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o funcionário já definiu a senha inicial. |
 | `token_version` | `INTEGER NOT NULL DEFAULT 0` | Invalida sessões emitidas antes de uma alteração de segurança. |
@@ -574,7 +573,7 @@ consentimento, sem copiar dados pessoais.
 
 ### `employee`
 
-**Por que existe:** Mantém o vínculo operacional do funcionário e seu token de CPF.
+**Por que existe:** Mantém somente o vínculo operacional do funcionário com loja, papel e ciclo de vida.
 
 **Relacionamentos:** employee_role(role_id), retail_store(store_id), employee_private_data(employee_id).
 
@@ -583,7 +582,6 @@ consentimento, sem copiar dados pessoais.
 | `employee_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `store_id` | `INTEGER NOT NULL REFERENCES retail_store(store_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
 | `role_id` | `INTEGER NOT NULL REFERENCES employee_role(role_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
-| `cpf` | `VARCHAR(80) NOT NULL UNIQUE` | Token `CPF_SHA256_<64-hex>` ou token legado aceito durante a transição; nunca contém CPF aberto. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `hire_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | Data de negócio e possível filtro temporal. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
@@ -592,8 +590,8 @@ consentimento, sem copiar dados pessoais.
 
 ### `employee_private_data`
 
-**Por que existe:** Isola nome e contatos do funcionário em um cofre lógico 1:1,
-com criptografia reversível autenticada, busca cega e apresentação mascarada.
+**Por que existe:** Isola nome, CPF e contatos do funcionário em um cofre lógico 1:1,
+com criptografia reversível autenticada e apresentação mascarada.
 A tabela é excluída integralmente do ETL analítico.
 
 **Relacionamentos:** employee(employee_id) com `ON DELETE CASCADE`.
@@ -601,13 +599,12 @@ A tabela é excluída integralmente do ETL analítico.
 | Campo | Definição SQL | Uso |
 |---|---|---|
 | `employee_id` | `INTEGER PRIMARY KEY REFERENCES employee(employee_id) ON DELETE CASCADE` | Identifica o proprietário do envelope sem duplicar identidade. |
-| `name_ciphertext`, `email_ciphertext`, `phone_ciphertext` | `BYTEA` | Ciphertext AES-256-GCM com tag de autenticação; não é texto codificado nem hash. |
-| `name_nonce`, `email_nonce`, `phone_nonce` | `BYTEA` com 12 bytes | Nonce exclusivo para cada criptografia AES-GCM. |
-| `name_token`, `email_token`, `phone_token` | `VARCHAR(96)` | Índice cego `HMAC256_V<versão>_<64-hex>` para igualdade; não permite recuperar o valor. |
-| `name_masked`, `email_masked`, `phone_masked` | `VARCHAR` | Valor seguro para telas e logs; nunca serve como fonte para descriptografia. |
+| `name_ciphertext`, `cpf_ciphertext`, `email_ciphertext`, `phone_ciphertext` | `BYTEA` | Ciphertext AES-256-GCM com tag de autenticação; não é texto codificado nem hash. |
+| `name_nonce`, `cpf_nonce`, `email_nonce`, `phone_nonce` | `BYTEA` com 12 bytes | Nonce exclusivo para cada criptografia AES-GCM. |
+| `name_masked`, `cpf_masked`, `email_masked`, `phone_masked` | `VARCHAR` | Valor seguro para telas; nunca serve como fonte para descriptografia. |
 | `key_version` | `SMALLINT` positivo | Versão da chave externa necessária para rotação e descriptografia. |
 | `algorithm` | `VARCHAR(20) DEFAULT 'AES-256-GCM'` | Algoritmo obrigatório do envelope. |
-| `protection_state` | `VARCHAR(20)` | `LEGACY_TOKEN` durante backfill ou `ENCRYPTED` quando completo. |
+| `protection_state` | `VARCHAR(20)` | `MIGRATION_PENDING` durante backfill ou `ENCRYPTED` quando completo. |
 | `encrypted_at` | `TIMESTAMPTZ` | Momento em que o serviço gerou o envelope atual. |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | Auditoria temporal do registro protegido. |
 
