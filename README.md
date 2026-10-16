@@ -59,6 +59,8 @@ authorized backend/RPA to backfill every AES-GCM envelope, and only then run
 `finalize_existing_reversible_pii.sql`. The finalizer refuses to drop legacy
 columns when any envelope or Firebase UID is missing. Encryption and HMAC keys
 must stay in an external KMS/secret vault and are never stored in PostgreSQL.
+The field-by-field protection inventory is documented in
+`docs/INVENTARIO_PROTECAO_DADOS_2026-10-16.md`.
 
 ## Analytics database
 
