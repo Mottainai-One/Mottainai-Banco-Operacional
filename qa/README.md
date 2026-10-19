@@ -36,3 +36,28 @@ docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --pr
 No uso local, a API fica em `http://localhost:18080`. Verifique `http://localhost:18080/actuator/health` e `http://localhost:18080/swagger-ui.html`. Os e-mails de teste ficam no Mailpit em `http://localhost:18025`; o SMTP de QA é interno à rede Docker e não envia mensagens para destinatários reais. Para o servidor compartilhado, omita os dois arquivos `*.local.yaml`: PostgreSQL, API e Mailpit não terão portas publicadas diretamente. A futura configuração HTTPS será a única entrada pública.
 
 Esta etapa verifica que a API inicia contra o esquema operacional de QA e serve health/OpenAPI. Ela não substitui os testes unitários da API nem os cenários completos de negócio, que devem permanecer visíveis na CI. O serviço de IA e a URL compartilhada virão em etapas seguintes.
+
+## IA e serviços de apoio
+
+Clone `Mottainai-IA` ao lado deste repositório. Enquanto a PR de QA da IA estiver aberta, use `feature/qa-ia-stack`. Acrescente as variáveis `QA_IA_POSTGRES_DSN`, `QA_IA_JWT_SECRET`, `QA_REDIS_PASSWORD`, `QA_MONGO_USER` e `QA_MONGO_PASSWORD` ao `qa/.env`; veja `qa/.env.example`. A senha PostgreSQL na DSN deve ser codificada para URL se contiver caracteres reservados. Use senhas próprias de QA, distintas das reais.
+
+```bash
+docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml -f qa/compose.local.yaml -f qa/compose.ia.local.yaml up -d --build ia
+docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml --profile verify run --rm verify-ia
+```
+
+Localmente a IA responde em `http://localhost:18000/readyz`. MongoDB e Redis não publicam portas. O teste de readiness exige PostgreSQL, MongoDB e Redis; `/chat` só poderá ser validado quando houver uma chave de LLM exclusiva de QA e dados sintéticos adequados. A CI usa credenciais descartáveis e não configura provedor de LLM.
+
+## Frontend e mobile
+
+O frontend pode ser compilado e aberto como prévia local, acrescentando `qa/compose.frontend.yaml` e `qa/compose.frontend.local.yaml` ao comando Compose e usando `--profile preview`. Ele responde em `http://localhost:18081`. O login do frontend ainda é simulado por código com uma conta fixa: não publique essa prévia na Internet nem trate o fluxo como teste integrado de autenticação.
+
+O aplicativo Android não é um serviço Docker. Emuladores no mesmo computador usam `apiBaseUrl=http://10.0.2.2:18080/` e `iaBaseUrl=http://10.0.2.2:18000/` no `local.properties` ignorado pelo Git. Veja `docs/QA-ENVIRONMENT.md` no repositório mobile. Antes de distribuir o APK à equipe, configure um projeto Firebase exclusivo de QA.
+
+## RPA
+
+O repositório RPA tem uma imagem de verificação que executa `pytest` sem rede e sem credenciais. O agendamento real e a carga operacional → analítico não são ativados pelo Compose de QA. Testes de ponta a ponta dessas cargas dependerão de bancos descartáveis e massa sintética.
+
+## Estado da publicação compartilhada
+
+Estes arquivos permitem executar e verificar os componentes em uma máquina Docker local ou em um runner de CI. A equipe ainda precisa de um servidor acessível, HTTPS e endpoints de QA para mobile antes que o ambiente seja disponibilizado a todos. Mantenha os bancos e serviços internos sem portas públicas quando fizer essa implantação.

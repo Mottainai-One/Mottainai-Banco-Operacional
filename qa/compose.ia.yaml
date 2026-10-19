@@ -1,0 +1,75 @@
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${QA_MONGO_USER:?Set QA_MONGO_USER in qa/.env}
+      MONGO_INITDB_ROOT_PASSWORD: ${QA_MONGO_PASSWORD:?Set QA_MONGO_PASSWORD in qa/.env}
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - qa_internal
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${QA_REDIS_PASSWORD:?Set QA_REDIS_PASSWORD in qa/.env}"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - qa_internal
+
+  ia:
+    build:
+      context: ${QA_IA_BUILD_CONTEXT:-../../Mottainai-IA}
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_started
+      redis:
+        condition: service_started
+    environment:
+      ENV: qa
+      POSTGRES_DSN: ${QA_IA_POSTGRES_DSN:?Set QA_IA_POSTGRES_DSN in qa/.env}
+      POSTGRES_POOL_SIZE: "2"
+      POSTGRES_MAX_OVERFLOW: "1"
+      MONGO_URI: mongodb://${QA_MONGO_USER:?Set QA_MONGO_USER in qa/.env}:${QA_MONGO_PASSWORD:?Set QA_MONGO_PASSWORD in qa/.env}@mongo:27017/mottainai_qa?authSource=admin
+      MONGO_DB: mottainai_qa
+      REDIS_URL: redis://:${QA_REDIS_PASSWORD:?Set QA_REDIS_PASSWORD in qa/.env}@redis:6379/0
+      REDIS_PASSWORD: ${QA_REDIS_PASSWORD:?Set QA_REDIS_PASSWORD in qa/.env}
+      JWT_SECRET: ${QA_IA_JWT_SECRET:?Set QA_IA_JWT_SECRET in qa/.env}
+      GROQ_API_KEY: ${QA_GROQ_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=8)"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    networks:
+      - qa_internal
+      - qa_edge
+
+  verify-ia:
+    image: curlimages/curl:8.10.1
+    profiles: [verify]
+    depends_on:
+      ia:
+        condition: service_healthy
+    entrypoint: ["sh", "-ec"]
+    command:
+      - >-
+        curl -fsS http://ia:8000/livez | grep -q '"status":"alive"';
+        curl -fsS http://ia:8000/readyz | grep -q '"status":"ready"'
+    networks:
+      - qa_edge
+
+volumes:
+  mongo_data:
+  redis_data:
+
+networks:
+  qa_edge: {}
