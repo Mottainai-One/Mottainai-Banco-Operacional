@@ -49,3 +49,5 @@ ORDER BY load_order;
 ```
 
 A RPA valida novamente as colunas do operacional antes de abrir cada batch. Assim, um banco instalado a partir destes scripts permanece coerente com o contrato versionado.
+
+Para uma instalação existente que ainda tenha os watermarks antigos, execute no banco analítico `database/analytics/13_align_existing_watermarks.sql`.
