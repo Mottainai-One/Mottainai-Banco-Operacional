@@ -39,7 +39,7 @@ Esta etapa verifica que a API inicia contra o esquema operacional de QA e serve 
 
 ## IA e serviços de apoio
 
-Clone `Mottainai-IA` ao lado deste repositório. Enquanto a PR de QA da IA estiver aberta, use `feature/qa-ia-stack`. Acrescente as variáveis `QA_IA_POSTGRES_DSN`, `QA_IA_JWT_SECRET`, `QA_REDIS_PASSWORD`, `QA_MONGO_USER` e `QA_MONGO_PASSWORD` ao `qa/.env`; veja `qa/.env.example`. A senha PostgreSQL na DSN deve ser codificada para URL se contiver caracteres reservados. Use senhas próprias de QA, distintas das reais.
+Clone `Mottainai-IA` ao lado deste repositório. Enquanto a PR de QA da IA estiver aberta, use `feature/qa-ia-stack`. Acrescente as variáveis `QA_IA_POSTGRES_DSN`, `QA_ANALYTICS_ADMIN_PASSWORD`, `QA_ANALYTICS_READER_PASSWORD`, `QA_IA_JWT_SECRET`, `QA_REDIS_PASSWORD`, `QA_MONGO_USER` e `QA_MONGO_PASSWORD` ao `qa/.env`; veja `qa/.env.example`. A senha PostgreSQL operacional na DSN deve ser codificada para URL se contiver caracteres reservados; para o leitor analítico use uma senha alfanumérica, pois o Compose monta a DSN. Use senhas próprias de QA, distintas das reais.
 
 ```bash
 docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml -f qa/compose.local.yaml -f qa/compose.ia.local.yaml up -d --build ia
@@ -61,3 +61,7 @@ O repositório RPA tem uma imagem de verificação que executa `pytest` sem rede
 ## Estado da publicação compartilhada
 
 Estes arquivos permitem executar e verificar os componentes em uma máquina Docker local ou em um runner de CI. A equipe ainda precisa de um servidor acessível, HTTPS e endpoints de QA para mobile antes que o ambiente seja disponibilizado a todos. Mantenha os bancos e serviços internos sem portas públicas quando fizer essa implantação.
+
+### Contrato API e banco pendente
+
+A migração `database/operational/29_finalize_reversible_employee_pii.sql` remove `app_user.cpf` e `app_user.email`. A entidade `AppUser` na branch atual da API ainda mapeia essas colunas. O job `10. API Spring conectada ao PostgreSQL de QA` da CI aponta essa incompatibilidade; a API precisa atualizar seu mapeamento e suas operações de identidade antes que a stack integrada seja aprovada. Não desative `ddl-auto=validate` para ignorar o problema. O teste da IA com os dois bancos físicos, MongoDB e Redis já passa separadamente.
