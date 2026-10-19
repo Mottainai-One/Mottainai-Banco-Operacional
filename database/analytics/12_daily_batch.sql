@@ -279,6 +279,7 @@ INSERT INTO etl_source_contract (
     ('supplier_history', 620, 'INCREMENTAL', 'changed_at', 'dim_supplier', 'BUSINESS', TRUE, TRUE, 'Supplier attribute history without contacts'),
     ('product_price_history', 630, 'INCREMENTAL', 'changed_at', 'dim_product', 'BUSINESS', TRUE, TRUE, 'Product price history'),
     ('system_rule', 640, 'INCREMENTAL', 'updated_at', 'engine_suggestion', 'BUSINESS', TRUE, TRUE, 'Rules used to explain analytical recommendations'),
+    ('employee_private_data', 899, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Encrypted identity envelopes and masks never enter analytics'),
     ('app_user', 900, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Authentication accounts never enter analytics'),
     ('customer_auth', 901, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Customer credentials never enter analytics'),
     ('staff_session', 902, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Session hashes never enter analytics'),
@@ -319,7 +320,12 @@ BEGIN
                 'refresh_token_hash', 'token_hash', 'recovery_token_hash',
                 'code_hash', 'firebase_uid', 'address_token', 'street',
                 'number', 'neighborhood', 'zip_code', 'old_data', 'new_data',
-                'stack_trace', 'parameters', 'payload', 'response'
+                'stack_trace', 'parameters', 'payload', 'response',
+                'name_ciphertext', 'name_nonce', 'name_token', 'name_masked',
+                'cpf_ciphertext', 'cpf_nonce', 'cpf_masked',
+                'email_ciphertext', 'email_nonce', 'email_token', 'email_masked',
+                'phone_ciphertext', 'phone_nonce', 'phone_token', 'phone_masked',
+                'key_version', 'encrypted_at'
             ]) THEN
                 RETURN TRUE;
             END IF;

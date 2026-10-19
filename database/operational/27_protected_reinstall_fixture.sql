@@ -55,25 +55,48 @@ BEGIN
     )
     RETURNING store_id INTO v_store_id;
 
-    INSERT INTO employee (
-        store_id, role_id, name, cpf, email
-    ) VALUES (
-        v_store_id,
-        v_role_id,
-        'EMP_SHA256_' || repeat('E', 64),
-        'CPF_SHA256_' || repeat('F', 64),
-        'EMAIL_SHA256_' || repeat('1', 64)
-    )
+    INSERT INTO employee (store_id, role_id, active)
+    VALUES (v_store_id, v_role_id, FALSE)
     RETURNING employee_id INTO v_employee_id;
 
-    INSERT INTO app_user (
-        employee_id, email, password_hash, cpf, password_set
+    INSERT INTO employee_private_data (
+        employee_id,
+        name_ciphertext,
+        name_nonce,
+        name_masked,
+        cpf_ciphertext,
+        cpf_nonce,
+        cpf_masked,
+        email_ciphertext,
+        email_nonce,
+        email_masked,
+        key_version,
+        protection_state,
+        encrypted_at
     ) VALUES (
         v_employee_id,
-        'EMAIL_SHA256_' || repeat('2', 64),
+        decode(repeat('11', 17), 'hex'),
+        decode(repeat('22', 12), 'hex'),
+        'EMPLOYEE_FIXTURE',
+        decode(repeat('55', 17), 'hex'),
+        decode(repeat('66', 12), 'hex'),
+        '***.***.***-**',
+        decode(repeat('33', 17), 'hex'),
+        decode(repeat('44', 12), 'hex'),
+        'f***@example.test',
+        1,
+        'ENCRYPTED',
+        CURRENT_TIMESTAMP
+    );
+
+    INSERT INTO app_user (
+        employee_id, firebase_uid, password_hash, password_set, active
+    ) VALUES (
+        v_employee_id,
+        NULL,
         crypt('reinstall-fixture-only', gen_salt('bf', 4)),
-        'CPF_SHA256_' || repeat('F', 64),
-        TRUE
+        FALSE,
+        FALSE
     );
 
     RAISE NOTICE 'Protected reinstall fixture created';

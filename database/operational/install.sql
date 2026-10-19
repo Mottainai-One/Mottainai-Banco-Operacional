@@ -22,6 +22,8 @@ BEGIN;
 \ir 22_sensitive_data_contract.sql
 \ir 24_jpa_compatibility.sql
 \ir 25_api_rpa_compatibility.sql
+\ir 28_reversible_employee_pii.sql
+\ir 29_finalize_reversible_employee_pii.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'

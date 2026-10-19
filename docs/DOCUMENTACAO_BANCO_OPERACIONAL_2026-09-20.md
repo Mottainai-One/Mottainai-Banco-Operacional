@@ -1,6 +1,6 @@
 # Documentação concreta do banco operacional Mottainai
 
-**Versão:** 2026-10-11
+**Versão:** 2026-10-16
 **Database:** `mottainai_operational`
 **Schema:** `mottainai`
 **Finalidade:** servir como fonte transacional oficial para a operação e como contrato de dados para a API.
@@ -30,25 +30,28 @@ Os scripts instaláveis ficam exclusivamente em `database/operational`. Esta doc
 
 O banco operacional segue o mesmo conceito acordado para o banco legado. O
 backend de origem trata o dado antes da persistência e o PostgreSQL valida o
-formato recebido. CPF, documento de venda e identificadores externos usam
-tokens SHA-256 prefixados; senhas e códigos de recuperação de baixa entropia
-usam BCrypt; contatos são mascarados, pseudonimizados ou convertidos em token.
+formato recebido. Documento de venda e identificadores externos usam tokens
+SHA-256 prefixados; senhas e códigos de recuperação de baixa entropia usam
+BCrypt. Nome, CPF, e-mail e telefone do funcionário usam criptografia
+reversível autenticada AES-256-GCM e valor mascarado. A decisão final não usa
+HMAC nem índice cego nesses quatro campos.
 
-`employee.cpf` é o token principal e permanece único. `app_user.cpf` é uma
-cópia controlada por triggers e nunca contém o CPF original. Para manter o RPA
-compatível, o banco aceita tanto `CPF_TKN_XXXXXX`, definido pelo legado, quanto
-`CPF_SHA256_` seguido de 64 caracteres hexadecimais. Dados novos devem usar o
-formato SHA-256.
+Após a finalização, `employee` e `app_user` não guardam CPF. O CPF cifrado fica
+somente em `employee_private_data`, junto do nonce e da versão da chave. A API
+não faz busca por CPF ou e-mail: contas ativas são localizadas pelo
+`firebase_uid`, e convites pendentes pelo token de convite.
 
 O módulo de clientes não passa pelo legado, mas segue o mesmo princípio. Nome,
 CPF, e-mail, telefone e UID externo chegam tokenizados. A data de nascimento é
 reduzida para `birth_year`, e o endereço residencial é representado somente por
 `address_token`; não há vínculo com o endereço operacional de lojas.
 
-O banco não possui chave de reversão e não oferece função pública para tratar
-dados brutos. Para identificadores de baixa entropia, como CPF, o backend deve
-usar SHA-256 com segredo do ambiente antes de montar o token. O segredo nunca
-é enviado ao PostgreSQL.
+As chaves AES ficam exclusivamente em KMS/secret manager, com versão e
+rotação; não são gravadas nem recebidas por função do PostgreSQL. Somente um
+serviço autorizado pode abrir o envelope. AES-GCM garante confidencialidade e
+autenticidade. Nonces de 96 bits devem ser aleatórios e jamais reutilizados com
+a mesma chave. Mascaramento é apenas apresentação e nunca substitui
+criptografia.
 
 ## Particionamento mensal
 
@@ -67,6 +70,7 @@ O particionamento melhora poda de partições quando a consulta filtra a coluna 
 
 ```text
 company 1---N retail_store 1---N employee 1---1 app_user
+                                employee 1---1 employee_private_data
 company 1---N product
 retail_store 1---N inventory N---1 batch N---1 product
 supplier 1---N purchase_order 1---N purchase_order_item N---1 product
@@ -84,7 +88,7 @@ disposal 1---N disposal_item
 
 | Recurso | Rotas principais | Tabelas |
 |---|---|---|
-| Autenticação e funcionários | `POST /auth/login`, `POST /auth/password-reset`, `GET/POST/PUT /employees` | `app_user`, `password_reset_token`, `employee`, `employee_role` |
+| Autenticação e funcionários | `POST /auth/login`, `POST /auth/password-reset`, `GET/POST/PUT /employees` | `app_user`, `password_reset_token`, `employee`, `employee_private_data`, `employee_role` |
 | Empresas e lojas | `GET/POST/PUT /companies`, `GET/POST/PUT /stores` | `company`, `retail_store`, `address` |
 | Produtos | `GET/POST/PUT /products`, `GET /products/{id}/prices` | `product`, `product_category`, `tax_profile`, `store_product_price` |
 | Fornecedores e compras | `GET/POST /suppliers`, `GET/POST /purchase-orders`, `POST /receivings` | `supplier`, `supplier_product`, `purchase_order*`, `receiving*` |
@@ -132,8 +136,9 @@ mottainai_api` ao abrir a conexão.
 
 | Camada | Controle aplicado |
 |---|---|
-| Identidade | Senhas e códigos de recuperação usam BCrypt; tokens de sessão usam SHA-256 |
-| Dados pessoais | CPF, documento de venda, UID externo e contatos são armazenados somente em formato tratado |
+| Identidade | Login do funcionário usa `firebase_uid`; senhas e códigos de recuperação usam BCrypt; tokens de sessão usam SHA-256 |
+| Dados pessoais | Nome, CPF, e-mail e telefone do funcionário usam AES-256-GCM; documento de venda e identificadores não recuperáveis permanecem tokenizados |
+| Chaves | Chaves AES ficam fora do banco, em KMS/secret manager, com menor privilégio, versão, auditoria e rotação |
 | Cliente | A role `mottainai_customer_api` acessa apenas o cliente autenticado e seus próprios dados de fidelidade |
 | RPA | `legacy_sync_record` mantém correlação e SHA-256 do payload; `mottainai_migrator` limita o contexto de importação |
 | Sessão | `staff_session` controla expiração, rotação, revogação, IP e dispositivo |
@@ -150,8 +155,11 @@ mottainai_api` ao abrir a conexão.
 ### Contrato obrigatório da API
 
 Cada requisição autenticada deve executar dentro de uma transação. A API
-valida a senha com BCrypt antes de inicializar o contexto no banco. A identidade
-informada ao bootstrap já deve estar tokenizada:
+valida a senha com BCrypt antes de inicializar o contexto no banco. O bootstrap
+aceita somente `FIREBASE_UID`; e-mail e CPF não são identidades de autenticação.
+Convites pendentes usam `fn_bootstrap_staff_context_by_token`. Nome, CPF e
+contatos só podem ser abertos por serviço autorizado, que
+lê o envelope e usa a chave externa ao PostgreSQL:
 
 ```sql
 BEGIN;
@@ -206,6 +214,8 @@ registros sem vínculo seguro continuam na quarentena da RPA.
 - manter credenciais no secret manager do ambiente, nunca no repositório;
 - usar BCrypt com custo revisado para senhas e códigos de recuperação;
 - gerar tokens SHA-256 no backend e manter o segredo fora do banco;
+- criptografar nome, CPF, e-mail e telefone de funcionário com AES-256-GCM no serviço autorizado;
+- manter chaves no KMS/secret manager, registrar acessos e testar rotação e recuperação;
 - ativar backups criptografados, recuperação ponto no tempo e teste periódico de restauração;
 - monitorar tentativas de login, falhas de RLS, revogações e alterações de privilégio;
 - manter logs sem senha, token, CPF integral ou payload pessoal desnecessário;
@@ -226,7 +236,22 @@ ordem declarada pelo instalador.
 Em bases existentes, execute os módulos incrementais na ordem
 `10_product_company.sql`, `20_security_hardening.sql`,
 `22_sensitive_data_contract.sql`, `24_jpa_compatibility.sql` e
-`25_api_rpa_compatibility.sql`. Os arquivos `11_product_company_tests.sql` e
+`25_api_rpa_compatibility.sql`. Depois, a alteração de PII ocorre em duas
+entregas independentes:
+
+1. Execute `prepare_existing_reversible_pii.sql` para criar o cofre e marcar os
+   registros legados como estado transitório.
+2. Atualize API/RPA para criptografar valores vindos da fonte original com
+   AES-256-GCM e preencher `employee_private_data`. Um SHA-256
+   existente não pode ser descriptografado nem convertido em ciphertext.
+3. Preencha `app_user.firebase_uid` para todas as contas ativas. Convites
+   pendentes podem permanecer sem UID.
+4. Execute `finalize_existing_reversible_pii.sql`. O preflight falha sem apagar
+   nada se qualquer envelope ou UID estiver incompleto; somente então remove
+   `employee.name/cpf/email/phone` e `app_user.cpf/email`.
+
+Faça backup e teste restauração antes da finalização. Os arquivos
+`11_product_company_tests.sql` e
 `26_api_rpa_compatibility_tests.sql` pertencem ao CI e não fazem parte do
 instalador de produção.
 
@@ -312,10 +337,10 @@ O catálogo abaixo é gerado a partir dos scripts desta versão. “Relacionamen
 |---|---|---|
 | `user_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `employee_id` | `INTEGER NOT NULL UNIQUE REFERENCES employee(employee_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
-| `cpf` | `CHAR(11) NOT NULL UNIQUE CHECK (fn_validate_cpf(cpf))` | CPF sincronizado com `employee.cpf`; dado pessoal restrito. |
-| `email` | `VARCHAR(150) NOT NULL UNIQUE CHECK (fn_validate_email(email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
+| `firebase_uid` | `VARCHAR(255) UNIQUE` | Identidade externa primária. É obrigatória para conta ativa e nula durante convite pendente. |
 | `password_hash` | `VARCHAR(255) NOT NULL` | Hash criptográfico; o valor original não é persistido. |
 | `password_set` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o funcionário já definiu a senha inicial. |
+| `token_version` | `INTEGER NOT NULL DEFAULT 0` | Invalida sessões emitidas antes de uma alteração de segurança. |
 | `last_login` | `TIMESTAMP` | Atributo do domínio desta entidade. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
@@ -548,24 +573,40 @@ consentimento, sem copiar dados pessoais.
 
 ### `employee`
 
-**Por que existe:** Mantém o funcionário e seu CPF oficial.
+**Por que existe:** Mantém somente o vínculo operacional do funcionário com loja, papel e ciclo de vida.
 
-**Relacionamentos:** employee_role(role_id), retail_store(store_id).
+**Relacionamentos:** employee_role(role_id), retail_store(store_id), employee_private_data(employee_id).
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
 | `employee_id` | `INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | Identificador ou chave de correlação. |
 | `store_id` | `INTEGER NOT NULL REFERENCES retail_store(store_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
 | `role_id` | `INTEGER NOT NULL REFERENCES employee_role(role_id) ON DELETE RESTRICT` | Identificador ou chave de correlação. |
-| `name` | `VARCHAR(150) NOT NULL` | Atributo do domínio desta entidade. |
-| `cpf` | `CHAR(11) NOT NULL UNIQUE CHECK (fn_validate_cpf(cpf))` | CPF normalizado com 11 dígitos; dado pessoal restrito. |
-| `email` | `VARCHAR(150) CHECK (fn_validate_email(email))` | Endereço eletrônico sujeito a validação e controle de acesso. |
-| `phone` | `VARCHAR(20)` | Atributo do domínio desta entidade. |
 | `active` | `BOOLEAN NOT NULL DEFAULT TRUE` | Indica se o registro pode ser utilizado. |
 | `hire_date` | `DATE NOT NULL DEFAULT CURRENT_DATE` | Data de negócio e possível filtro temporal. |
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 | `updated_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 | `deleted_at` | `TIMESTAMP` | Atributo do domínio desta entidade. |
+
+### `employee_private_data`
+
+**Por que existe:** Isola nome, CPF e contatos do funcionário em um cofre lógico 1:1,
+com criptografia reversível autenticada e apresentação mascarada.
+A tabela é excluída integralmente do ETL analítico.
+
+**Relacionamentos:** employee(employee_id) com `ON DELETE CASCADE`.
+
+| Campo | Definição SQL | Uso |
+|---|---|---|
+| `employee_id` | `INTEGER PRIMARY KEY REFERENCES employee(employee_id) ON DELETE CASCADE` | Identifica o proprietário do envelope sem duplicar identidade. |
+| `name_ciphertext`, `cpf_ciphertext`, `email_ciphertext`, `phone_ciphertext` | `BYTEA` | Ciphertext AES-256-GCM com tag de autenticação; não é texto codificado nem hash. |
+| `name_nonce`, `cpf_nonce`, `email_nonce`, `phone_nonce` | `BYTEA` com 12 bytes | Nonce exclusivo para cada criptografia AES-GCM. |
+| `name_masked`, `cpf_masked`, `email_masked`, `phone_masked` | `VARCHAR` | Valor seguro para telas; nunca serve como fonte para descriptografia. |
+| `key_version` | `SMALLINT` positivo | Versão da chave externa necessária para rotação e descriptografia. |
+| `algorithm` | `VARCHAR(20) DEFAULT 'AES-256-GCM'` | Algoritmo obrigatório do envelope. |
+| `protection_state` | `VARCHAR(20)` | `MIGRATION_PENDING` durante backfill ou `ENCRYPTED` quando completo. |
+| `encrypted_at` | `TIMESTAMPTZ` | Momento em que o serviço gerou o envelope atual. |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | Auditoria temporal do registro protegido. |
 
 ### `employee_role`
 

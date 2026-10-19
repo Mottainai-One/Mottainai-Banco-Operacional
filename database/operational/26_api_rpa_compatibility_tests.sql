@@ -31,6 +31,30 @@ BEGIN
         RAISE EXCEPTION 'Required API columns are missing: %', v_missing;
     END IF;
 
+    IF to_regclass('mottainai.employee_private_data') IS NULL THEN
+        RAISE EXCEPTION 'Reversible employee private-data table is missing';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND (
+              (table_name = 'employee' AND column_name IN ('name', 'cpf', 'email', 'phone'))
+              OR (table_name = 'app_user' AND column_name IN ('cpf', 'email'))
+          )
+    ) THEN
+        RAISE EXCEPTION 'Legacy employee/app_user personal columns were not removed';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mottainai.app_user'::regclass
+          AND conname = 'ck_app_user_active_firebase_uid'
+    ) THEN
+        RAISE EXCEPTION 'Active-user Firebase UID constraint is missing';
+    END IF;
+
     SELECT COUNT(*)
     INTO v_count
     FROM pg_enum
@@ -251,15 +275,33 @@ BEGIN
         )
         RETURNING store_id INTO v_store_id;
 
-        INSERT INTO employee (
-            store_id, role_id, name, cpf
-        ) VALUES (
-            v_store_id,
-            v_role_id,
-            'EMP_SHA256_' || repeat('B', 64),
-            'CPF_SHA256_' || repeat('C', 64)
-        )
+        INSERT INTO employee (store_id, role_id)
+        VALUES (v_store_id, v_role_id)
         RETURNING employee_id INTO v_employee_id;
+
+        INSERT INTO employee_private_data (
+            employee_id,
+            name_ciphertext,
+            name_nonce,
+            name_masked,
+            cpf_ciphertext,
+            cpf_nonce,
+            cpf_masked,
+            key_version,
+            protection_state,
+            encrypted_at
+        ) VALUES (
+            v_employee_id,
+            decode(repeat('AB', 17), 'hex'),
+            decode(repeat('CD', 12), 'hex'),
+            'EMPLOYEE_TEST',
+            decode(repeat('EF', 17), 'hex'),
+            decode(repeat('01', 12), 'hex'),
+            '***.***.***-**',
+            1,
+            'ENCRYPTED',
+            CURRENT_TIMESTAMP
+        );
 
         SELECT COUNT(*)
         INTO v_audit_count

@@ -140,14 +140,33 @@ DROP TRIGGER IF EXISTS trg_propagate_employee_cpf ON employee;
 ALTER TABLE company ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE retail_store ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE supplier ALTER COLUMN phone TYPE VARCHAR(80);
-ALTER TABLE employee ALTER COLUMN cpf TYPE VARCHAR(80) USING btrim(cpf);
-ALTER TABLE employee ALTER COLUMN phone TYPE VARCHAR(80);
-ALTER TABLE app_user ALTER COLUMN cpf TYPE VARCHAR(80) USING btrim(cpf);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'employee' AND column_name = 'cpf') THEN
+        EXECUTE 'ALTER TABLE employee ALTER COLUMN cpf TYPE VARCHAR(80) USING btrim(cpf)';
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'app_user' AND column_name = 'cpf') THEN
+        EXECUTE 'ALTER TABLE app_user ALTER COLUMN cpf TYPE VARCHAR(80) USING btrim(cpf)';
+    END IF;
+END $$;
 ALTER TABLE customer ALTER COLUMN cpf TYPE VARCHAR(80) USING btrim(cpf);
 ALTER TABLE customer ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE customer_auth ALTER COLUMN login_email TYPE VARCHAR(150);
 ALTER TABLE sales_transaction
     ALTER COLUMN customer_document TYPE VARCHAR(80) USING btrim(customer_document);
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'phone'
+    ) THEN
+        EXECUTE 'ALTER TABLE employee ALTER COLUMN phone TYPE VARCHAR(80)';
+    END IF;
+END;
+$$;
 
 -- Existing clear values are irreversibly converted once. New writes must
 -- arrive protected by the backend before reaching PostgreSQL.
@@ -175,33 +194,92 @@ UPDATE supplier
 SET phone = 'PHONE_SHA256_' || upper(encode(digest(regexp_replace(phone, '\D', '', 'g'), 'sha256'), 'hex'))
 WHERE phone IS NOT NULL AND NOT fn_is_protected_phone(phone);
 
-UPDATE employee
-SET name = 'EMP_SHA256_' || upper(encode(digest(btrim(name), 'sha256'), 'hex'))
-WHERE name !~ '^EMP_[0-9]+$'
-  AND NOT fn_is_sha256_token(name, 'EMP');
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'name'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE employee
+            SET name = 'EMP_SHA256_' || upper(encode(digest(btrim(name), 'sha256'), 'hex'))
+            WHERE name !~ '^EMP_[0-9]+$'
+              AND NOT fn_is_sha256_token(name, 'EMP')
+        $sql$;
+    END IF;
+END;
+$$;
 
-UPDATE employee
-SET cpf = 'CPF_SHA256_' || upper(encode(digest(regexp_replace(cpf, '\D', '', 'g'), 'sha256'), 'hex'))
-WHERE cpf !~ '^CPF_TKN_[A-Fa-f0-9]{6}$'
-  AND NOT fn_is_sha256_token(cpf, 'CPF');
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'employee' AND column_name = 'cpf') THEN
+        EXECUTE $sql$
+            UPDATE employee
+            SET cpf = 'CPF_SHA256_' || upper(encode(digest(regexp_replace(cpf, '\D', '', 'g'), 'sha256'), 'hex'))
+            WHERE cpf !~ '^CPF_TKN_[A-Fa-f0-9]{6}$'
+              AND NOT fn_is_sha256_token(cpf, 'CPF')
+        $sql$;
+    END IF;
+END $$;
 
-UPDATE employee
-SET email = 'EMAIL_SHA256_' || upper(encode(digest(lower(btrim(email)), 'sha256'), 'hex'))
-WHERE email IS NOT NULL AND NOT fn_is_protected_email(email);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'email'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE employee
+            SET email = 'EMAIL_SHA256_' || upper(encode(digest(lower(btrim(email)), 'sha256'), 'hex'))
+            WHERE email IS NOT NULL AND NOT fn_is_protected_email(email)
+        $sql$;
+    END IF;
 
-UPDATE employee
-SET phone = 'PHONE_SHA256_' || upper(encode(digest(regexp_replace(phone, '\D', '', 'g'), 'sha256'), 'hex'))
-WHERE phone IS NOT NULL AND NOT fn_is_protected_phone(phone);
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'phone'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE employee
+            SET phone = 'PHONE_SHA256_' || upper(encode(digest(regexp_replace(phone, '\D', '', 'g'), 'sha256'), 'hex'))
+            WHERE phone IS NOT NULL AND NOT fn_is_protected_phone(phone)
+        $sql$;
+    END IF;
+END;
+$$;
 
-UPDATE app_user app
-SET cpf = employee.cpf
-FROM employee
-WHERE employee.employee_id = app.employee_id
-  AND app.cpf IS DISTINCT FROM employee.cpf;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'employee' AND column_name = 'cpf')
+       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'app_user' AND column_name = 'cpf') THEN
+        EXECUTE 'UPDATE app_user app SET cpf = employee.cpf FROM employee '
+             || 'WHERE employee.employee_id = app.employee_id '
+             || 'AND app.cpf IS DISTINCT FROM employee.cpf';
+    END IF;
+END $$;
 
-UPDATE app_user
-SET email = 'EMAIL_SHA256_' || upper(encode(digest(lower(btrim(email)), 'sha256'), 'hex'))
-WHERE NOT fn_is_protected_email(email);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'app_user'
+          AND column_name = 'email'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE app_user
+            SET email = 'EMAIL_SHA256_' || upper(encode(digest(lower(btrim(email)), 'sha256'), 'hex'))
+            WHERE NOT fn_is_protected_email(email)
+        $sql$;
+    END IF;
+END;
+$$;
 
 ALTER TABLE customer
     ADD COLUMN IF NOT EXISTS birth_year SMALLINT,
@@ -269,42 +347,38 @@ SET customer_document = 'DOC_SHA256_' || upper(encode(digest(regexp_replace(cust
 WHERE customer_document IS NOT NULL
   AND NOT fn_is_sha256_token(customer_document, 'DOC');
 
--- Recreate synchronization with the protected CPF token size.
-CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SET search_path = mottainai, pg_temp
-AS $$
-DECLARE
-    v_employee_cpf VARCHAR(80);
+-- Legacy-only synchronization. It is skipped after module 29 removes the
+-- duplicated CPF columns in favor of employee_private_data.
+DO $$
 BEGIN
-    SELECT cpf INTO v_employee_cpf
-    FROM mottainai.employee
-    WHERE employee_id = NEW.employee_id;
-
-    IF v_employee_cpf IS NULL THEN
-        RAISE EXCEPTION 'Employee % does not exist or has no protected CPF token', NEW.employee_id;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'employee' AND column_name = 'cpf')
+       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'app_user' AND column_name = 'cpf') THEN
+        EXECUTE $fn$
+            CREATE OR REPLACE FUNCTION fn_sync_app_user_cpf()
+            RETURNS TRIGGER LANGUAGE plpgsql SET search_path = mottainai, pg_temp
+            AS $body$
+            DECLARE v_employee_cpf VARCHAR(80);
+            BEGIN
+                SELECT cpf INTO v_employee_cpf FROM mottainai.employee
+                WHERE employee_id = NEW.employee_id;
+                IF v_employee_cpf IS NULL THEN
+                    RAISE EXCEPTION 'Employee % does not exist or has no protected CPF token', NEW.employee_id;
+                END IF;
+                IF TG_OP = 'INSERT' AND NEW.cpf IS NULL THEN
+                    NEW.cpf := v_employee_cpf;
+                ELSIF NEW.cpf IS DISTINCT FROM v_employee_cpf THEN
+                    RAISE EXCEPTION 'app_user.cpf must match the protected employee CPF token';
+                END IF;
+                RETURN NEW;
+            END $body$
+        $fn$;
+        EXECUTE 'CREATE TRIGGER trg_sync_app_user_cpf BEFORE INSERT OR UPDATE OF employee_id, cpf '
+             || 'ON app_user FOR EACH ROW EXECUTE FUNCTION fn_sync_app_user_cpf()';
+        EXECUTE 'CREATE TRIGGER trg_propagate_employee_cpf AFTER UPDATE OF cpf ON employee '
+             || 'FOR EACH ROW WHEN (OLD.cpf IS DISTINCT FROM NEW.cpf) '
+             || 'EXECUTE FUNCTION fn_propagate_employee_cpf()';
     END IF;
-
-    IF TG_OP = 'INSERT' AND NEW.cpf IS NULL THEN
-        NEW.cpf := v_employee_cpf;
-    ELSIF NEW.cpf IS DISTINCT FROM v_employee_cpf THEN
-        RAISE EXCEPTION 'app_user.cpf must match the protected employee CPF token';
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER trg_sync_app_user_cpf
-BEFORE INSERT OR UPDATE OF employee_id, cpf ON app_user
-FOR EACH ROW EXECUTE FUNCTION fn_sync_app_user_cpf();
-
-CREATE TRIGGER trg_propagate_employee_cpf
-AFTER UPDATE OF cpf ON employee
-FOR EACH ROW
-WHEN (OLD.cpf IS DISTINCT FROM NEW.cpf)
-EXECUTE FUNCTION fn_propagate_employee_cpf();
+END $$;
 
 ALTER TABLE company ADD CONSTRAINT ck_company_email_protected
     CHECK (fn_is_protected_email(email));
@@ -319,24 +393,66 @@ ALTER TABLE supplier ADD CONSTRAINT ck_supplier_email_protected
 ALTER TABLE supplier ADD CONSTRAINT ck_supplier_phone_protected
     CHECK (phone IS NULL OR fn_is_protected_phone(phone));
 
-ALTER TABLE employee ADD CONSTRAINT uq_employee_cpf_token UNIQUE (cpf);
-ALTER TABLE employee ADD CONSTRAINT ck_employee_name_protected
-    CHECK (name ~ '^EMP_[0-9]+$' OR fn_is_sha256_token(name, 'EMP'));
-ALTER TABLE employee ADD CONSTRAINT ck_employee_cpf_protected
-    CHECK (cpf ~ '^CPF_TKN_[A-Fa-f0-9]{6}$' OR fn_is_sha256_token(cpf, 'CPF'));
-ALTER TABLE employee ADD CONSTRAINT ck_employee_email_protected
-    CHECK (email IS NULL OR fn_is_protected_email(email));
-ALTER TABLE employee ADD CONSTRAINT ck_employee_phone_protected
-    CHECK (phone IS NULL OR fn_is_protected_phone(phone));
-
-ALTER TABLE app_user ADD CONSTRAINT uq_app_user_email_token UNIQUE (email);
-ALTER TABLE app_user ADD CONSTRAINT uq_app_user_cpf_token UNIQUE (cpf);
-ALTER TABLE app_user ADD CONSTRAINT ck_app_user_email_protected
-    CHECK (fn_is_protected_email(email));
-ALTER TABLE app_user ADD CONSTRAINT ck_app_user_cpf_protected
-    CHECK (cpf ~ '^CPF_TKN_[A-Fa-f0-9]{6}$' OR fn_is_sha256_token(cpf, 'CPF'));
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'employee' AND column_name = 'cpf') THEN
+        ALTER TABLE employee ADD CONSTRAINT uq_employee_cpf_token UNIQUE (cpf);
+        ALTER TABLE employee ADD CONSTRAINT ck_employee_cpf_protected
+            CHECK (cpf ~ '^CPF_TKN_[A-Fa-f0-9]{6}$' OR fn_is_sha256_token(cpf, 'CPF'));
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'mottainai' AND table_name = 'app_user' AND column_name = 'cpf') THEN
+        ALTER TABLE app_user ADD CONSTRAINT uq_app_user_cpf_token UNIQUE (cpf);
+        ALTER TABLE app_user ADD CONSTRAINT ck_app_user_cpf_protected
+            CHECK (cpf ~ '^CPF_TKN_[A-Fa-f0-9]{6}$' OR fn_is_sha256_token(cpf, 'CPF'));
+    END IF;
+END $$;
 ALTER TABLE app_user ADD CONSTRAINT ck_app_user_password_bcrypt
     CHECK (fn_is_bcrypt_hash(password_hash));
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'name'
+    ) THEN
+        ALTER TABLE employee ADD CONSTRAINT ck_employee_name_protected
+            CHECK (name ~ '^EMP_[0-9]+$' OR fn_is_sha256_token(name, 'EMP'));
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'email'
+    ) THEN
+        ALTER TABLE employee ADD CONSTRAINT ck_employee_email_protected
+            CHECK (email IS NULL OR fn_is_protected_email(email));
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'phone'
+    ) THEN
+        ALTER TABLE employee ADD CONSTRAINT ck_employee_phone_protected
+            CHECK (phone IS NULL OR fn_is_protected_phone(phone));
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'app_user'
+          AND column_name = 'email'
+    ) THEN
+        ALTER TABLE app_user ADD CONSTRAINT uq_app_user_email_token UNIQUE (email);
+        ALTER TABLE app_user ADD CONSTRAINT ck_app_user_email_protected
+            CHECK (fn_is_protected_email(email));
+    END IF;
+END;
+$$;
 
 ALTER TABLE customer ADD CONSTRAINT uq_customer_cpf_token UNIQUE (cpf);
 ALTER TABLE customer ADD CONSTRAINT uq_customer_external_auth_token UNIQUE (external_auth_uid);

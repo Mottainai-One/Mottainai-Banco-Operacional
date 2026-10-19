@@ -23,6 +23,11 @@ sensitive-data contract and API/RPA compatibility:
   compatibility, including creation of `password_reset_token` when absent;
 - `25_api_rpa_compatibility.sql`: API views/functions, missing soft-delete
   columns, enum values, tenant monitoring and controlled legacy-import context.
+- `28_reversible_employee_pii.sql`: transition table for AES-256-GCM employee
+  name, CPF, email and phone envelopes plus masked display values;
+- `29_finalize_reversible_employee_pii.sql`: fail-closed removal of employee
+  identity columns after encrypted backfill; active accounts require Firebase
+  UID, while pending invitations may keep it null.
 
 For a **database already installed locally**, run the incremental update instead
 of reinstalling the entire schema:
@@ -48,6 +53,13 @@ The database does not accept raw CPF, customer documents, customer identity
 values or clear client contact data after module 22. Source backends must apply
 the documented treatment before persistence. See
 `docs/DOCUMENTACAO_BANCO_OPERACIONAL_2026-09-20.md` for the complete contract.
+
+Existing databases must run `prepare_existing_reversible_pii.sql`, allow the
+authorized backend/RPA to backfill every AES-GCM envelope, and only then run
+`finalize_existing_reversible_pii.sql`. The finalizer refuses to drop legacy
+columns when any required envelope or active-account Firebase UID is missing.
+Encryption keys must stay in an external KMS/secret vault and are never stored
+in PostgreSQL.
 
 ## Analytics database
 
