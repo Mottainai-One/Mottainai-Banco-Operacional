@@ -1,4 +1,25 @@
 services:
+  analytics-postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mottainai_qa_analytics
+      POSTGRES_USER: qa_analytics_admin
+      POSTGRES_PASSWORD: ${QA_ANALYTICS_ADMIN_PASSWORD:?Set QA_ANALYTICS_ADMIN_PASSWORD in qa/.env}
+      QA_ANALYTICS_READER_PASSWORD: ${QA_ANALYTICS_READER_PASSWORD:?Set QA_ANALYTICS_READER_PASSWORD in qa/.env}
+    volumes:
+      - analytics_postgres_data:/var/lib/postgresql/data
+      - ../database/analytics:/schema:ro
+      - ./init-analytics:/docker-entrypoint-initdb.d:ro
+      - ./analytics-reader.sql:/qa/analytics-reader.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U qa_analytics_admin -d mottainai_qa_analytics -tAc \"SELECT to_regclass('mottainai_analytics.vw_published_batch') IS NOT NULL\" | grep -qx t"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - qa_internal
+
   mongo:
     image: mongo:7.0
     restart: unless-stopped
@@ -28,6 +49,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      analytics-postgres:
+        condition: service_healthy
       mongo:
         condition: service_started
       redis:
@@ -35,6 +58,7 @@ services:
     environment:
       ENV: qa
       POSTGRES_DSN: ${QA_IA_POSTGRES_DSN:?Set QA_IA_POSTGRES_DSN in qa/.env}
+      ANALYTICS_POSTGRES_DSN: postgresql+asyncpg://mottainai_qa_analytics_read:${QA_ANALYTICS_READER_PASSWORD:?Set QA_ANALYTICS_READER_PASSWORD in qa/.env}@analytics-postgres:5432/mottainai_qa_analytics
       POSTGRES_POOL_SIZE: "2"
       POSTGRES_MAX_OVERFLOW: "1"
       MONGO_URI: mongodb://${QA_MONGO_USER:?Set QA_MONGO_USER in qa/.env}:${QA_MONGO_PASSWORD:?Set QA_MONGO_PASSWORD in qa/.env}@mongo:27017/mottainai_qa?authSource=admin
@@ -68,6 +92,7 @@ services:
       - qa_edge
 
 volumes:
+  analytics_postgres_data:
   mongo_data:
   redis_data:
 

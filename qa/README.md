@@ -20,7 +20,7 @@ O instalador do PostgreSQL só executa os scripts em `/docker-entrypoint-initdb.
 - O Compose compartilhado não publica a porta do banco.
 - Nenhuma senha real ou dado operacional é versionado.
 
-O QA completo ainda requer a API Spring, a IA, os testes de integração e um servidor acessível à equipe.
+O acesso compartilhado à equipe ainda requer um servidor e HTTPS.
 
 ## Etapa 2: API Spring com o banco de QA
 
@@ -46,7 +46,7 @@ docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml -f qa
 docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml --profile verify run --rm verify-ia
 ```
 
-Localmente a IA responde em `http://localhost:18000/readyz`. MongoDB e Redis não publicam portas. O teste de readiness exige PostgreSQL, MongoDB e Redis; `/chat` só poderá ser validado quando houver uma chave de LLM exclusiva de QA e dados sintéticos adequados. A CI usa credenciais descartáveis e não configura provedor de LLM.
+Localmente a IA responde em `http://localhost:18000/readyz`. O Compose instala um segundo PostgreSQL físico para o analítico, com usuário de leitura separado. MongoDB, Redis e os dois PostgreSQLs não publicam portas na configuração compartilhada. O teste de readiness exige os dois bancos, MongoDB e Redis; `/chat` só poderá ser validado quando houver uma chave de LLM exclusiva de QA e dados sintéticos adequados. A CI usa credenciais descartáveis e não configura provedor de LLM.
 
 ## Frontend e mobile
 
