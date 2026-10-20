@@ -458,7 +458,7 @@ permanecer nulo para clientes.
 originais do cliente que a aplicação esteja autorizada a tratar. Os tokens de
 `customer` e `customer_auth` continuam sendo usados para buscas e unicidade.
 
-**Relacionamentos:** customer(customer_id) com `ON DELETE CASCADE`.
+**Relacionamentos:** customer(customer_id) com `ON DELETE RESTRICT`, para que excluir fisicamente o cadastro não apague o envelope cifrado.
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
@@ -470,11 +470,26 @@ originais do cliente que a aplicação esteja autorizada a tratar. Os tokens de
 | `payload_format` | `VARCHAR(20) DEFAULT 'JSON_V1'` | Versão do conteúdo cifrado interpretada pela API. |
 | `encrypted_at` | `TIMESTAMPTZ NOT NULL` | Momento de geração do envelope atual. |
 | `created_at`, `updated_at` | `TIMESTAMPTZ NOT NULL` | Auditoria temporal sem expor o conteúdo. |
+| `deleted_at` | `TIMESTAMPTZ` | Exclusão lógica. Mantém o envelope cifrado e bloqueia leituras normais depois da exclusão. |
 
-A tabela força RLS. Somente `mottainai_customer_api`, após bootstrap do cliente,
-pode selecionar, inserir ou atualizar o próprio envelope. Não há permissão de
-`DELETE` para a API, `mottainai_api` não recebe acesso, e ciphertext/nonce são
-redigidos da auditoria. A chave AES nunca é armazenada no PostgreSQL.
+A tabela força RLS. `mottainai_customer_api`, após bootstrap, pode selecionar,
+inserir ou atualizar o próprio envelope ativo. `mottainai_api` pode selecionar
+um envelope ativo somente após bootstrap de funcionário e quando o funcionário
+está ativo e seu `employee_role.permission_level` é pelo menos 80 (Manager ou
+Administrator no seed padrão), e o cliente tem uma venda não excluída na mesma
+empresa do funcionário. A regra também exige cliente ativo. A role da API não
+pode apagar fisicamente o envelope; a FK usa `ON DELETE RESTRICT` para
+evitar exclusão em cascata. Ao anonimizar, a aplicação deve preencher
+`deleted_at` sem alterar `payload_ciphertext`, `payload_nonce` ou `key_version`.
+Na API PR #63, `CustomerPrivateDataService.erase` ainda usa `deleteById`; isso
+precisa ser trocado por um `UPDATE deleted_at` antes de integrar as mudanças,
+pois a role da aplicação não tem `DELETE`. Além disso, o banco preenche
+`customer_private_data.deleted_at` automaticamente quando `customer.active`
+fica falso ou `customer.deleted_at` é preenchido.
+As leituras de dados pessoais devem ser registradas pela API com funcionário,
+cliente, data/hora e finalidade; RLS controla o acesso, mas não registra `SELECT`
+automaticamente. Ciphertext/nonce são redigidos dos logs de auditoria. A chave
+AES nunca é armazenada no PostgreSQL.
 
 ### `customer_auth`
 

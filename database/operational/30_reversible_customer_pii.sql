@@ -13,7 +13,7 @@ SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS customer_private_data (
     customer_id         INTEGER PRIMARY KEY
-        REFERENCES customer(customer_id) ON DELETE CASCADE,
+        REFERENCES customer(customer_id) ON DELETE RESTRICT,
     payload_ciphertext  BYTEA NOT NULL,
     payload_nonce       BYTEA NOT NULL,
     key_version         SMALLINT NOT NULL,
@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS customer_private_data (
     payload_format      VARCHAR(20) NOT NULL DEFAULT 'JSON_V1',
     encrypted_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at          TIMESTAMPTZ
 );
 
 -- Upgrade a table created from the preliminary ZIP migration without
@@ -29,7 +30,30 @@ CREATE TABLE IF NOT EXISTS customer_private_data (
 ALTER TABLE customer_private_data
     ADD COLUMN IF NOT EXISTS algorithm VARCHAR(20) NOT NULL DEFAULT 'AES-256-GCM',
     ADD COLUMN IF NOT EXISTS payload_format VARCHAR(20) NOT NULL DEFAULT 'JSON_V1',
-    ADD COLUMN IF NOT EXISTS encrypted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+    ADD COLUMN IF NOT EXISTS encrypted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- A logical deletion must keep the encrypted envelope. Replacing the old
+-- cascading foreign key prevents a customer-row delete from destroying it.
+ALTER TABLE customer_private_data
+    DROP CONSTRAINT IF EXISTS customer_private_data_customer_id_fkey,
+    DROP CONSTRAINT IF EXISTS fk_customer_private_data_customer;
+ALTER TABLE customer_private_data
+    ADD CONSTRAINT fk_customer_private_data_customer
+        FOREIGN KEY (customer_id) REFERENCES customer(customer_id) ON DELETE RESTRICT;
+
+-- Preserve existing envelopes for inactive customers while marking them as
+-- logically unavailable through the normal application access paths.
+UPDATE customer_private_data private_data
+SET deleted_at = COALESCE(customer.deleted_at, CURRENT_TIMESTAMP)
+FROM customer
+WHERE customer.customer_id = private_data.customer_id
+  AND private_data.deleted_at IS NULL
+  AND (NOT customer.active OR customer.deleted_at IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS idx_customer_private_data_active
+    ON customer_private_data (customer_id)
+    WHERE deleted_at IS NULL;
 
 ALTER TABLE customer_private_data
     DROP CONSTRAINT IF EXISTS customer_private_data_payload_ciphertext_check,
@@ -132,7 +156,7 @@ DROP POLICY IF EXISTS customer_private_data_select_policy
 CREATE POLICY customer_private_data_select_policy
     ON customer_private_data
     FOR SELECT TO mottainai_customer_api
-    USING (customer_id = fn_get_current_customer_id());
+    USING (customer_id = fn_get_current_customer_id() AND deleted_at IS NULL);
 
 DROP POLICY IF EXISTS customer_private_data_insert_policy
     ON customer_private_data;
@@ -146,8 +170,143 @@ DROP POLICY IF EXISTS customer_private_data_update_policy
 CREATE POLICY customer_private_data_update_policy
     ON customer_private_data
     FOR UPDATE TO mottainai_customer_api
-    USING (customer_id = fn_get_current_customer_id())
-    WITH CHECK (customer_id = fn_get_current_customer_id());
+    USING (customer_id = fn_get_current_customer_id() AND deleted_at IS NULL)
+    WITH CHECK (customer_id = fn_get_current_customer_id() AND deleted_at IS NULL);
+
+-- Staff access follows the existing employee_role.permission_level model.
+-- Only active employees in Manager (80) or Administrator (100) roles can
+-- retrieve an active customer's encrypted envelope, and only for customers
+-- associated with their company through a non-deleted sale. The external
+-- API/KMS decrypts it; PostgreSQL never stores or sees key material.
+CREATE OR REPLACE FUNCTION fn_can_read_customer_private_data(p_customer_id INTEGER)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = mottainai, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM app_user u
+        JOIN employee e ON e.employee_id = u.employee_id
+        JOIN employee_role r ON r.role_id = e.role_id
+        JOIN retail_store s ON s.store_id = e.store_id
+        JOIN company c ON c.company_id = s.company_id
+        JOIN customer cust ON cust.customer_id = p_customer_id
+        WHERE u.user_id = fn_get_current_user_id()
+          AND u.active AND e.active AND r.active AND s.active AND c.active
+          AND u.deleted_at IS NULL
+          AND e.deleted_at IS NULL
+          AND r.deleted_at IS NULL
+          AND s.deleted_at IS NULL
+          AND c.deleted_at IS NULL
+          AND cust.active AND cust.deleted_at IS NULL
+          AND r.permission_level >= 80
+          AND EXISTS (
+              SELECT 1
+              FROM sales_transaction sale
+              JOIN retail_store sale_store ON sale_store.store_id = sale.store_id
+              WHERE sale.customer_id = cust.customer_id
+                AND sale.deleted_at IS NULL
+                AND sale.status <> 'CANCELED'
+                AND sale_store.company_id = fn_get_current_company_id()
+                AND sale_store.active
+                AND sale_store.deleted_at IS NULL
+          )
+    );
+$$;
+
+REVOKE ALL ON FUNCTION fn_can_read_customer_private_data(INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_can_read_customer_private_data(INTEGER) TO mottainai_api;
+
+CREATE OR REPLACE FUNCTION fn_customer_private_data_customer_is_inactive(
+    p_customer_id INTEGER
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = mottainai, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM customer
+        WHERE customer_id = p_customer_id
+          AND (NOT active OR deleted_at IS NOT NULL)
+    );
+$$;
+
+REVOKE ALL ON FUNCTION fn_customer_private_data_customer_is_inactive(INTEGER)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_customer_private_data_customer_is_inactive(INTEGER)
+    TO mottainai_api, mottainai_customer_api;
+
+DROP POLICY IF EXISTS customer_private_data_staff_select_policy
+    ON customer_private_data;
+CREATE POLICY customer_private_data_staff_select_policy
+    ON customer_private_data
+    FOR SELECT TO mottainai_api
+    USING (
+        deleted_at IS NULL
+        AND fn_can_read_customer_private_data(customer_id)
+    );
+
+DROP POLICY IF EXISTS customer_private_data_staff_soft_delete_policy
+    ON customer_private_data;
+CREATE POLICY customer_private_data_staff_soft_delete_policy
+    ON customer_private_data
+    FOR UPDATE TO mottainai_api
+    USING (
+        deleted_at IS NULL
+        AND fn_can_read_customer_private_data(customer_id)
+    )
+    WITH CHECK (
+        deleted_at IS NOT NULL
+        AND (
+            fn_can_read_customer_private_data(customer_id)
+            OR fn_customer_private_data_customer_is_inactive(customer_id)
+        )
+    );
+
+-- Allows the lifecycle trigger to mark an envelope after the customer becomes
+-- inactive. The application role can update only deleted_at, and the policy
+-- permits this transition only when the parent customer is already inactive.
+DROP POLICY IF EXISTS customer_private_data_lifecycle_soft_delete_policy
+    ON customer_private_data;
+CREATE POLICY customer_private_data_lifecycle_soft_delete_policy
+    ON customer_private_data
+    FOR UPDATE TO PUBLIC
+    USING (
+        deleted_at IS NULL
+        AND fn_customer_private_data_customer_is_inactive(customer_id)
+    )
+    WITH CHECK (
+        deleted_at IS NOT NULL
+        AND fn_customer_private_data_customer_is_inactive(customer_id)
+    );
+
+CREATE OR REPLACE FUNCTION fn_trg_mark_customer_private_data_deleted()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = mottainai, pg_temp
+AS $$
+BEGIN
+    IF (NOT NEW.active OR NEW.deleted_at IS NOT NULL)
+       AND (OLD.active OR OLD.deleted_at IS NULL) THEN
+        UPDATE customer_private_data
+        SET deleted_at = COALESCE(NEW.deleted_at, CURRENT_TIMESTAMP)
+        WHERE customer_id = NEW.customer_id
+          AND deleted_at IS NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION fn_trg_mark_customer_private_data_deleted() FROM PUBLIC;
+DROP TRIGGER IF EXISTS trg_mark_customer_private_data_deleted ON customer;
+CREATE TRIGGER trg_mark_customer_private_data_deleted
+AFTER UPDATE OF active, deleted_at ON customer
+FOR EACH ROW EXECUTE FUNCTION fn_trg_mark_customer_private_data_deleted();
 
 -- Revoke permissions possibly granted by the preliminary ZIP migration.
 REVOKE ALL ON customer_private_data FROM PUBLIC;
@@ -155,6 +314,8 @@ REVOKE ALL ON customer_private_data FROM mottainai_api;
 REVOKE ALL ON customer_private_data FROM mottainai_customer_api;
 GRANT SELECT, INSERT, UPDATE ON customer_private_data
     TO mottainai_customer_api;
+GRANT SELECT ON customer_private_data TO mottainai_api;
+GRANT UPDATE (deleted_at) ON customer_private_data TO mottainai_api;
 
 COMMENT ON TABLE customer_private_data IS
     'Customer-scoped AES-256-GCM envelope. Tokens remain in customer/customer_auth for lookup; encryption keys remain in external KMS.';
@@ -164,12 +325,14 @@ COMMENT ON COLUMN customer_private_data.payload_nonce IS
     'Unique 96-bit nonce generated by the authorized encrypting service.';
 COMMENT ON COLUMN customer_private_data.key_version IS
     'External KMS key version required for decryption and key rotation.';
+COMMENT ON COLUMN customer_private_data.deleted_at IS
+    'Logical erasure timestamp. The ciphertext is retained and remains encrypted; normal customer and staff reads are denied after this timestamp. Set automatically when the customer becomes inactive.';
 
 INSERT INTO schema_version (
     version, description, type, script, installed_by
 ) VALUES (
     '30',
-    'Add tenant-isolated reversible customer private-data envelope',
+    'Add encrypted customer private data with logical deletion and permission-scoped staff reads',
     'SQL',
     '30_reversible_customer_pii.sql',
     CURRENT_USER
