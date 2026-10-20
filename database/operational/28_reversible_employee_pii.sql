@@ -12,7 +12,12 @@ SET LOCAL search_path TO mottainai, public;
 SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE employee
+    ADD COLUMN IF NOT EXISTS cpf_lookup_hmac BYTEA,
     ADD COLUMN IF NOT EXISTS email_lookup_hmac BYTEA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employee_cpf_lookup_hmac
+    ON employee (cpf_lookup_hmac)
+    WHERE cpf_lookup_hmac IS NOT NULL AND deleted_at IS NULL;
 
 -- Keep the existing unique-email behavior without retaining readable email.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_employee_email_lookup_hmac
