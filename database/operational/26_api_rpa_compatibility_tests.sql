@@ -35,6 +35,20 @@ BEGIN
         RAISE EXCEPTION 'Reversible employee private-data table is missing';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'email_lookup_hmac'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'employee'
+          AND indexname = 'uq_employee_email_lookup_hmac'
+    ) THEN
+        RAISE EXCEPTION 'Employee email uniqueness fingerprint is missing';
+    END IF;
+
     IF to_regclass('mottainai.customer_private_data') IS NULL THEN
         RAISE EXCEPTION 'Reversible customer private-data table is missing';
     END IF;

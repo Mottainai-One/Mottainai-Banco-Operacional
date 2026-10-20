@@ -4,11 +4,20 @@
 --
 -- PostgreSQL stores only AES-256-GCM envelopes produced by the backend/RPA.
 -- Keys remain in KMS/secret vault and are never stored in this database.
--- HMAC/blind-index tokens are intentionally not part of this contract.
+-- CPF and email lookup HMACs remain in the employee row as non-reversible,
+-- domain-separated fingerprints; raw values stay only in the AES-GCM envelope.
 -- ============================================================================
 
 SET LOCAL search_path TO mottainai, public;
 SET LOCAL lock_timeout = '5s';
+
+ALTER TABLE employee
+    ADD COLUMN IF NOT EXISTS email_lookup_hmac BYTEA;
+
+-- Keep the existing unique-email behavior without retaining readable email.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_employee_email_lookup_hmac
+    ON employee (email_lookup_hmac)
+    WHERE email_lookup_hmac IS NOT NULL AND deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS employee_private_data (
     employee_id       INTEGER PRIMARY KEY
