@@ -44,7 +44,10 @@ não faz busca por CPF ou e-mail: contas ativas são localizadas pelo
 O módulo de clientes não passa pelo legado, mas segue o mesmo princípio. Nome,
 CPF, e-mail, telefone e UID externo chegam tokenizados. A data de nascimento é
 reduzida para `birth_year`, e o endereço residencial é representado somente por
-`address_token`; não há vínculo com o endereço operacional de lojas.
+`address_token`; não há vínculo com o endereço operacional de lojas. Quando a
+aplicação precisa recuperar os valores originais autorizados, ela também grava
+um envelope AES-256-GCM opcional em `customer_private_data`. Os tokens continuam
+sendo o contrato de busca e o envelope nunca segue para o banco analítico.
 
 As chaves AES ficam exclusivamente em KMS/secret manager, com versão e
 rotação; não são gravadas nem recebidas por função do PostgreSQL. Somente um
@@ -78,6 +81,7 @@ purchase_order 1---N receiving 1---N receiving_item 1---N batch
 sales_transaction 1---N sale_item N---1 product
 sales_transaction 1---N sale_payment
 customer 1---1 loyalty_account 1---N loyalty_transaction
+customer 1---0..1 customer_private_data
 alert 1---N suggested_action 1---N promotion
 transfer 1---N transfer_item
 donation 1---N donation_item
@@ -447,6 +451,30 @@ permanecer nulo para clientes.
 | `created_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 | `updated_at` | `TIMESTAMP NOT NULL DEFAULT NOW()` | Data e hora usada para auditoria ou processamento. |
 | `deleted_at` | `TIMESTAMP` | Atributo do domínio desta entidade. |
+
+### `customer_private_data`
+
+**Por que existe:** Guarda, de forma opcional e recuperável, os dados pessoais
+originais do cliente que a aplicação esteja autorizada a tratar. Os tokens de
+`customer` e `customer_auth` continuam sendo usados para buscas e unicidade.
+
+**Relacionamentos:** customer(customer_id) com `ON DELETE CASCADE`.
+
+| Campo | Definição SQL | Uso |
+|---|---|---|
+| `customer_id` | `INTEGER PRIMARY KEY REFERENCES customer(customer_id) ON DELETE CASCADE` | Garante no máximo um envelope por cliente. |
+| `payload_ciphertext` | `BYTEA NOT NULL` | JSON_V1 cifrado com AES-256-GCM e tag de autenticação. |
+| `payload_nonce` | `BYTEA NOT NULL` com 12 bytes | Nonce exclusivo; nunca pode ser reutilizado com a mesma chave. |
+| `key_version` | `SMALLINT NOT NULL` positivo | Versão da chave mantida no KMS externo. |
+| `algorithm` | `VARCHAR(20) DEFAULT 'AES-256-GCM'` | Algoritmo permitido pelo contrato. |
+| `payload_format` | `VARCHAR(20) DEFAULT 'JSON_V1'` | Versão do conteúdo cifrado interpretada pela API. |
+| `encrypted_at` | `TIMESTAMPTZ NOT NULL` | Momento de geração do envelope atual. |
+| `created_at`, `updated_at` | `TIMESTAMPTZ NOT NULL` | Auditoria temporal sem expor o conteúdo. |
+
+A tabela força RLS. Somente `mottainai_customer_api`, após bootstrap do cliente,
+pode selecionar, inserir ou atualizar o próprio envelope. Não há permissão de
+`DELETE` para a API, `mottainai_api` não recebe acesso, e ciphertext/nonce são
+redigidos da auditoria. A chave AES nunca é armazenada no PostgreSQL.
 
 ### `customer_auth`
 

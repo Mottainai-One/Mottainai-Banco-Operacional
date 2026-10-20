@@ -9,7 +9,8 @@ BEGIN
     FROM (VALUES
         ('product'), ('inventory'), ('sales_transaction'),
         ('store_product_price'), ('inventory_count'),
-        ('password_reset_token'), ('event_queue')
+        ('password_reset_token'), ('event_queue'),
+        ('customer_private_data')
     ) AS required(name)
     WHERE to_regclass('mottainai.' || required.name) IS NULL;
 

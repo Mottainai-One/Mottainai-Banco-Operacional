@@ -27,7 +27,9 @@ sensitive-data contract and API/RPA compatibility:
   name, CPF, email and phone envelopes plus masked display values;
 - `29_finalize_reversible_employee_pii.sql`: fail-closed removal of employee
   identity columns after encrypted backfill; active accounts require Firebase
-  UID, while pending invitations may keep it null.
+  UID, while pending invitations may keep it null;
+- `30_reversible_customer_pii.sql`: optional AES-256-GCM customer identity
+  envelope protected by customer-scoped RLS and excluded from analytics.
 
 For a **database already installed locally**, run the incremental update instead
 of reinstalling the entire schema:
@@ -60,6 +62,18 @@ authorized backend/RPA to backfill every AES-GCM envelope, and only then run
 columns when any required envelope or active-account Firebase UID is missing.
 Encryption keys must stay in an external KMS/secret vault and are never stored
 in PostgreSQL.
+
+To add reversible customer identity storage to an existing installation without
+changing the current token lookup contract, run:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_operational \
+  -f database/operational/update_existing_customer_private_data.sql
+```
+
+The migration is additive. Existing customers remain valid, while the API may
+populate `customer_private_data` when it has the original values. Existing
+SHA-256 tokens cannot be decrypted to backfill the encrypted envelope.
 
 ## Analytics database
 

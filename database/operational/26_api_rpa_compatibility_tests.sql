@@ -35,6 +35,64 @@ BEGIN
         RAISE EXCEPTION 'Reversible employee private-data table is missing';
     END IF;
 
+    IF to_regclass('mottainai.customer_private_data') IS NULL THEN
+        RAISE EXCEPTION 'Reversible customer private-data table is missing';
+    END IF;
+
+    SELECT string_agg(required.column_name, ', ' ORDER BY required.column_name)
+    INTO v_missing
+    FROM (VALUES
+        ('payload_ciphertext'), ('payload_nonce'), ('key_version'),
+        ('algorithm'), ('payload_format'), ('encrypted_at')
+    ) AS required(column_name)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM information_schema.columns AS columns
+        WHERE columns.table_schema = 'mottainai'
+          AND columns.table_name = 'customer_private_data'
+          AND columns.column_name = required.column_name
+    );
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Customer private-data columns are missing: %', v_missing;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND relation.relname = 'customer_private_data'
+          AND relation.relrowsecurity
+          AND relation.relforcerowsecurity
+    ) THEN
+        RAISE EXCEPTION 'Customer private-data RLS must be enabled and forced';
+    END IF;
+
+    IF has_table_privilege(
+           'mottainai_api', 'mottainai.customer_private_data', 'SELECT')
+       OR NOT has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'SELECT')
+       OR NOT has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'INSERT')
+       OR NOT has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'UPDATE')
+       OR has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'DELETE') THEN
+        RAISE EXCEPTION 'Customer private-data privileges violate least privilege';
+    END IF;
+
+    IF (SELECT COUNT(*) FROM pg_policies
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'customer_private_data') <> 3 THEN
+        RAISE EXCEPTION 'Customer private-data requires SELECT, INSERT and UPDATE RLS policies';
+    END IF;
+
+    IF fn_sanitize_audit_json(
+        '{"payload_ciphertext":"secret","payload_nonce":"secret"}'::JSONB
+       )->>'payload_ciphertext' <> '[REDACTED]' THEN
+        RAISE EXCEPTION 'Encrypted customer payload is not redacted from logs';
+    END IF;
+
     IF EXISTS (
         SELECT 1
         FROM information_schema.columns

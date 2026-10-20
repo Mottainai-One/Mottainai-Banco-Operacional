@@ -39,7 +39,7 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM etl_source_contract
         WHERE source_table IN (
-            'employee_private_data', 'app_user', 'customer_auth', 'staff_session',
+            'customer_private_data', 'employee_private_data', 'app_user', 'customer_auth', 'staff_session',
             'password_reset_token', 'integration_log'
         )
           AND (enabled OR payload_policy <> 'EXCLUDED')
@@ -53,6 +53,8 @@ BEGIN
         '{"employee_id":1,"email_masked":"a***@example.com"}'::jsonb
     ) OR NOT fn_payload_has_forbidden_key(
         '{"employee_id":1,"cpf_ciphertext":"secret"}'::jsonb
+    ) OR NOT fn_payload_has_forbidden_key(
+        '{"customer_id":1,"payload_ciphertext":"secret"}'::jsonb
     ) THEN
         RAISE EXCEPTION 'Encrypted or masked identity fields are not blocked from analytics';
     END IF;

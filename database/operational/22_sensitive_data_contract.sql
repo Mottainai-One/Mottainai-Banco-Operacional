@@ -706,7 +706,10 @@ BEGIN
                     'password', 'password_hash', 'token', 'token_hash',
                     'refresh_token', 'refresh_token_hash', 'recovery_token_hash',
                     'cpf', 'customer_document', 'email', 'login_email', 'phone',
-                    'full_name', 'birth_date', 'external_auth_uid', 'address_token'
+                    'full_name', 'birth_date', 'external_auth_uid', 'address_token',
+                    'payload_ciphertext', 'payload_nonce',
+                    'name_ciphertext', 'name_nonce', 'cpf_ciphertext', 'cpf_nonce',
+                    'email_ciphertext', 'email_nonce', 'phone_ciphertext', 'phone_nonce'
                 ]) THEN '"[REDACTED]"'::JSONB
                 ELSE fn_sanitize_audit_json(entry.value)
             END)
