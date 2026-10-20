@@ -81,10 +81,26 @@ BEGIN
         RAISE EXCEPTION 'Customer private-data privileges violate least privilege';
     END IF;
 
-    IF (SELECT COUNT(*) FROM pg_policies
-        WHERE schemaname = 'mottainai'
-          AND tablename = 'customer_private_data') <> 3 THEN
-        RAISE EXCEPTION 'Customer private-data requires SELECT, INSERT and UPDATE RLS policies';
+    IF EXISTS (
+        SELECT required.policy_name
+        FROM (VALUES
+            ('customer_private_data_select_policy', 'SELECT'),
+            ('customer_private_data_insert_policy', 'INSERT'),
+            ('customer_private_data_update_policy', 'UPDATE'),
+            ('customer_private_data_staff_select_policy', 'SELECT'),
+            ('customer_private_data_staff_soft_delete_policy', 'UPDATE'),
+            ('customer_private_data_lifecycle_soft_delete_policy', 'UPDATE')
+        ) AS required(policy_name, command)
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM pg_policies policy
+            WHERE policy.schemaname = 'mottainai'
+              AND policy.tablename = 'customer_private_data'
+              AND policy.policyname = required.policy_name
+              AND policy.cmd = required.command
+        )
+    ) THEN
+        RAISE EXCEPTION 'Customer private-data RLS policies are missing or have the wrong command';
     END IF;
 
     IF fn_sanitize_audit_json(
