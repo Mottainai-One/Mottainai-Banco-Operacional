@@ -380,9 +380,10 @@ jobs:
       - name: Criar segredos descartaveis para o teste
         run: |
           umask 077
-          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nSTAFF_DATA_ENCRYPTION_KEY=%s\nSTAFF_DATA_LOOKUP_KEY=%s\nQA_API_BUILD_CONTEXT=../api\n' \
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nSTAFF_DATA_ENCRYPTION_KEY=%s\nSTAFF_DATA_LOOKUP_KEY=%s\nCUSTOMER_DATA_ENCRYPTION_KEY=%s\nQA_API_BUILD_CONTEXT=../api\n' \
             "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
             "$(openssl rand -base64 48 | tr -d '\n')" \
+            "$(openssl rand -base64 32 | tr -d '\n')" \
             "$(openssl rand -base64 32 | tr -d '\n')" \
             "$(openssl rand -base64 32 | tr -d '\n')" > qa/.env
 
