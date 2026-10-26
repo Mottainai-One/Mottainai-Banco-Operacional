@@ -51,3 +51,10 @@ ORDER BY load_order;
 A RPA valida novamente as colunas do operacional antes de abrir cada batch. Assim, um banco instalado a partir destes scripts permanece coerente com o contrato versionado.
 
 Para uma instalação existente que ainda tenha os watermarks antigos, execute no banco analítico `database/analytics/13_align_existing_watermarks.sql`.
+Para uma instalação existente que já contenha o contrato `etl_daily_batch`,
+aplique também `database/analytics/14_publish_mart_view.sql` conectado ao
+banco físico `MOTTAINAI_ANALITICO`. Essa migração faz
+`vw_published_batch` mostrar somente uma carga cujo `job_log` foi confirmado
+na mesma transação que escreve os fatos e dimensões. Registros antigos em
+`etl_daily_batch` permanecem para auditoria, mas não representam por si só
+um data mart atualizado.
