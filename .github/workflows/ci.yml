@@ -388,7 +388,7 @@ jobs:
         run: |
           docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml config --quiet
           docker compose --env-file qa/.env -f qa/compose.yaml up -d --wait postgres
-          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.app_user'::regclass AND attname = 'cpf' AND NOT attisdropped" | grep -qx cpf
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee_private_data'::regclass AND attname = 'cpf_ciphertext' AND NOT attisdropped" | grep -qx cpf_ciphertext
           docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml up -d --wait --build api
           docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
 
