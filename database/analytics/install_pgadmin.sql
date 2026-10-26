@@ -1883,14 +1883,19 @@ CREATE OR REPLACE VIEW vw_published_batch AS
 SELECT
     job_id,
     cutoff_at AS source_cutoff_at,
-    business_date AS snapshot_date,
+    (cutoff_at AT TIME ZONE 'America/Sao_Paulo')::DATE AS snapshot_date,
     batch_id,
-    published_at
-FROM etl_daily_batch
-WHERE pipeline_name = 'operational_to_analytics_daily'
-  AND status = 'PUBLISHED'
-ORDER BY business_date DESC, published_at DESC
+    finished_at AS published_at
+FROM job_log
+WHERE job_name = 'operational_to_analytics_daily'
+  AND status = 'SUCCEEDED'
+  AND batch_id IS NOT NULL
+  AND cutoff_at IS NOT NULL
+  AND metadata ->> 'publication_contract' = 'analytics_mart_v1'
+ORDER BY finished_at DESC, job_id DESC
 LIMIT 1;
+
+COMMENT ON VIEW vw_published_batch IS 'publication_contract=analytics_mart_v1';
 
 CREATE OR REPLACE VIEW vw_etl_daily_batch_health AS
 SELECT
