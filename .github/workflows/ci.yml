@@ -374,7 +374,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: Mottainai-One/Mottainai-Spring-Api-SQL
-          ref: feature/qa-api-container
+          ref: main
           path: api
 
       - name: Criar segredos descartaveis para o teste
