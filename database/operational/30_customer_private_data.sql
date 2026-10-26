@@ -2,6 +2,13 @@
 SET LOCAL search_path TO mottainai, public;
 SET LOCAL lock_timeout = '5s';
 
+-- The current API model still declares these optional columns. Keep them
+-- nullable for schema validation; the reversible identity flow never writes
+-- lookup HMACs or stores their keys in PostgreSQL.
+ALTER TABLE employee
+    ADD COLUMN IF NOT EXISTS cpf_lookup_hmac BYTEA,
+    ADD COLUMN IF NOT EXISTS email_lookup_hmac BYTEA;
+
 CREATE TABLE IF NOT EXISTS customer_private_data (
     customer_id INTEGER PRIMARY KEY REFERENCES customer(customer_id) ON DELETE CASCADE,
     payload_ciphertext BYTEA NOT NULL,
