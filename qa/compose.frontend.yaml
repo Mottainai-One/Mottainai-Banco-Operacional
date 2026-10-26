@@ -1,0 +1,17 @@
+services:
+  frontend:
+    build:
+      context: ${QA_FRONTEND_BUILD_CONTEXT:-../../Mottainai-Frontend}
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    profiles: [preview]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qa_edge
+
+networks:
+  qa_edge: {}

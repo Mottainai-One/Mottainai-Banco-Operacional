@@ -364,3 +364,75 @@ jobs:
       - name: Encerrar contêineres descartaveis
         if: always()
         run: docker compose --env-file qa/.env -f qa/compose.yaml down --volumes
+
+  qa-api-integration:
+    name: 10. API Spring conectada ao PostgreSQL de QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Mottainai-One/Mottainai-Spring-Api-SQL
+          ref: feature/qa-api-container
+          path: api
+
+      - name: Criar segredos descartaveis para o teste
+        run: |
+          umask 077
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nQA_API_BUILD_CONTEXT=../api\n' \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
+            "$(openssl rand -base64 48 | tr -d '\n')" > qa/.env
+
+      - name: Construir API e validar conexao com banco
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml up -d --wait postgres
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.app_user'::regclass AND attname = 'cpf' AND NOT attisdropped" | grep -qx cpf
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml up -d --wait --build api
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml logs --no-color postgres api
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml down --volumes
+
+  qa-ia-integration:
+    name: 11. IA conectada aos servicos de QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Mottainai-One/Mottainai-IA
+          ref: feature/qa-ia-stack
+          path: ia
+
+      - name: Criar credenciais descartaveis
+        run: |
+          umask 077
+          app_password="$(openssl rand -hex 24)"
+          mongo_password="$(openssl rand -hex 24)"
+          redis_password="$(openssl rand -hex 24)"
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_IA_POSTGRES_DSN=postgresql+asyncpg://mottainai_qa_app:%s@postgres:5432/mottainai_qa\nQA_ANALYTICS_ADMIN_PASSWORD=%s\nQA_ANALYTICS_READER_PASSWORD=%s\nQA_IA_JWT_SECRET=%s\nQA_MONGO_USER=qa_mongo_admin\nQA_MONGO_PASSWORD=%s\nQA_REDIS_PASSWORD=%s\nQA_GROQ_API_KEY=\nQA_IA_BUILD_CONTEXT=../ia\n' \
+            "$(openssl rand -hex 24)" "$app_password" "$app_password" \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
+            "$(openssl rand -base64 48 | tr -d '\n')" "$mongo_password" "$redis_password" > qa/.env
+
+      - name: Iniciar IA e verificar readiness
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml up -d --wait --build ia
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml --profile verify run --rm verify-ia
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml logs --no-color postgres analytics-postgres mongo redis ia
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml down --volumes
