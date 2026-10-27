@@ -81,3 +81,8 @@ de cliente que retorna somente o ID a partir do token `AUTH_SHA256_...`.
 O schema operacional já possui índices únicos parciais que permitem no máximo
 um turno aberto por terminal e por funcionário; por isso não é necessário
 adicionar outro índice para essa regra.
+
+A instalação limpa também executa `36_api_soft_delete_promotion_items.sql`,
+alinhada à Flyway V11 da API Spring. A migration de compatibilidade de promoção
+é repetível e mantém o histórico de itens removidos, permitindo cadastrar
+novamente o mesmo produto na promoção depois da exclusão lógica.

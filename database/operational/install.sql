@@ -30,5 +30,6 @@ COMMIT;
 -- POS API support includes enum changes that must be committed before use.
 -- Keep these incremental migrations outside the installation transaction.
 \ir update_existing_pos_api.sql
+\ir 36_api_soft_delete_promotion_items.sql
 
 \echo 'mottainai_operational installed successfully'
