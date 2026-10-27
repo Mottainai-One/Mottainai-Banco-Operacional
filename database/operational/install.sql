@@ -27,4 +27,8 @@ BEGIN;
 \ir 30_customer_private_data.sql
 COMMIT;
 
+-- POS API support includes enum changes that must be committed before use.
+-- Keep these incremental migrations outside the installation transaction.
+\ir update_existing_pos_api.sql
+
 \echo 'mottainai_operational installed successfully'
