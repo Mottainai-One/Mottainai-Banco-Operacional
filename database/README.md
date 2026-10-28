@@ -58,3 +58,31 @@ banco físico `MOTTAINAI_ANALITICO`. Essa migração faz
 na mesma transação que escreve os fatos e dimensões. Registros antigos em
 `etl_daily_batch` permanecem para auditoria, mas não representam por si só
 um data mart atualizado.
+
+## API do PDV
+
+O suporte do PDV é instalado somente no banco operacional. Em uma instalação
+existente, execute `database/operational/update_existing_pos_api.sql` conectado
+ao banco `mottainai_operational`:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_operational \
+  -f database/operational/update_existing_pos_api.sql
+```
+
+Não use `psql --single-transaction` para esse arquivo: as migrations 31 e 33
+adicionam valores `ENUM`, que precisam estar confirmados antes de as migrations
+posteriores usarem esses valores. A instalação limpa também executa esse
+atualizador após confirmar a transação do schema operacional. As migrations
+criam recibos idempotentes com RLS, habilitam o estado `DRAFT` para vendas e
+itens, mantêm itens de rascunho sem reserva de lote/estoque e expõem uma busca
+de cliente que retorna somente o ID a partir do token `AUTH_SHA256_...`.
+
+O schema operacional já possui índices únicos parciais que permitem no máximo
+um turno aberto por terminal e por funcionário; por isso não é necessário
+adicionar outro índice para essa regra.
+
+A instalação limpa também executa `36_api_soft_delete_promotion_items.sql`,
+alinhada à Flyway V11 da API Spring. A migration de compatibilidade de promoção
+é repetível e mantém o histórico de itens removidos, permitindo cadastrar
+novamente o mesmo produto na promoção depois da exclusão lógica.
