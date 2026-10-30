@@ -36,6 +36,34 @@ BEGIN
         RAISE EXCEPTION 'Reversible employee private-data table is missing';
     END IF;
 
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'email_lookup_hmac'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'employee'
+          AND indexname = 'uq_employee_email_lookup_hmac'
+    ) THEN
+        RAISE EXCEPTION 'Employee email uniqueness fingerprint is missing';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'cpf_lookup_hmac'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'employee'
+          AND indexname = 'uq_employee_cpf_lookup_hmac'
+    ) THEN
+        RAISE EXCEPTION 'Employee CPF uniqueness fingerprint is missing';
+    END IF;
+
     IF to_regclass('mottainai.customer_private_data') IS NULL THEN
         RAISE EXCEPTION 'Reversible customer private-data table is missing';
     END IF;
@@ -95,22 +123,23 @@ BEGIN
     SELECT string_agg(required.policy_name, ', ' ORDER BY required.policy_name)
     INTO v_missing
     FROM (VALUES
-        ('customer_private_data_select_policy'),
-        ('customer_private_data_insert_policy'),
-        ('customer_private_data_update_policy'),
-        ('customer_private_data_staff_select_policy'),
-        ('customer_private_data_staff_soft_delete_policy'),
-        ('customer_private_data_lifecycle_soft_delete_policy'),
-        ('client_api_private_data_select'),
-        ('client_profile_owner_private_select'),
-        ('client_profile_owner_private_insert'),
-        ('client_profile_owner_private_update')
-    ) AS required(policy_name)
+        ('customer_private_data_select_policy', 'SELECT'),
+        ('customer_private_data_insert_policy', 'INSERT'),
+        ('customer_private_data_update_policy', 'UPDATE'),
+        ('customer_private_data_staff_select_policy', 'SELECT'),
+        ('customer_private_data_staff_soft_delete_policy', 'UPDATE'),
+        ('customer_private_data_lifecycle_soft_delete_policy', 'UPDATE'),
+        ('client_api_private_data_select', 'SELECT'),
+        ('client_profile_owner_private_select', 'SELECT'),
+        ('client_profile_owner_private_insert', 'INSERT'),
+        ('client_profile_owner_private_update', 'UPDATE')
+    ) AS required(policy_name, command)
     WHERE NOT EXISTS (
         SELECT 1 FROM pg_policies
         WHERE schemaname = 'mottainai'
           AND tablename = 'customer_private_data'
           AND policyname = required.policy_name
+          AND cmd = required.command
     );
 
     IF v_missing IS NOT NULL OR EXISTS (

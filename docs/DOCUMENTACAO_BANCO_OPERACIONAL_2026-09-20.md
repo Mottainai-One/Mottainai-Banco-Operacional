@@ -513,6 +513,12 @@ empresa; sua única escrita direta é `deleted_at`. Não há `DELETE` físico pa
 as APIs. Ciphertext/nonce são redigidos da auditoria e excluídos do analítico.
 A chave AES nunca é armazenada no PostgreSQL.
 
+Ao anonimizar, a aplicação deve preencher `deleted_at` sem alterar o envelope.
+O banco também faz essa retirada lógica quando `customer.active` fica falso ou
+`customer.deleted_at` é preenchido. As leituras de dados pessoais devem ser
+registradas pela API com funcionário, cliente, data/hora e finalidade, pois RLS
+controla o acesso, mas não registra comandos `SELECT` automaticamente.
+
 ### `customer_auth`
 
 **Por que existe:** Controla autenticação e bloqueio do cliente.

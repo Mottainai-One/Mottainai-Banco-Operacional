@@ -1,7 +1,8 @@
 -- ============================================================================
 -- REVERSIBLE EMPLOYEE IDENTITY - FINALIZATION PHASE
--- Run after the backend/RPA has encrypted every employee name and CPF and any
--- populated email/phone. The migration fails closed before removing legacy PII.
+-- Run after the backend/RPA has encrypted every employee name and CPF, any
+-- populated email/phone, and populated the CPF/email uniqueness HMACs. The
+-- migration fails closed before removing legacy PII or its uniqueness contract.
 -- ============================================================================
 
 SET LOCAL search_path TO mottainai, public;
@@ -26,6 +27,14 @@ BEGIN
     END IF;
 
     IF EXISTS (
+        SELECT 1 FROM employee
+        WHERE cpf_lookup_hmac IS NULL
+    ) THEN
+        RAISE EXCEPTION
+            'Refusing PII finalization: employee CPF uniqueness fingerprints are incomplete';
+    END IF;
+
+    IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'mottainai' AND table_name = 'employee'
           AND column_name = 'email'
@@ -40,6 +49,17 @@ BEGIN
         $sql$ INTO v_incomplete;
         IF v_incomplete THEN
             RAISE EXCEPTION 'Refusing PII finalization: employee email envelopes are incomplete';
+        END IF;
+
+        EXECUTE $sql$
+            SELECT EXISTS (
+                SELECT 1 FROM employee
+                WHERE email IS NOT NULL AND email_lookup_hmac IS NULL
+            )
+        $sql$ INTO v_incomplete;
+        IF v_incomplete THEN
+            RAISE EXCEPTION
+                'Refusing PII finalization: employee email uniqueness fingerprints are incomplete';
         END IF;
     END IF;
 
