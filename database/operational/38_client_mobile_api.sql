@@ -74,28 +74,40 @@ REVOKE mottainai_client_catalog_owner,
 DO $membership_check$
 DECLARE
     v_api_oid OID;
+    v_unexpected_members TEXT;
 BEGIN
     SELECT oid INTO v_api_oid FROM pg_catalog.pg_roles
     WHERE rolname = 'mottainai_client_api';
 
-    IF EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_auth_members AS membership
-        JOIN pg_catalog.pg_roles AS granted_role ON granted_role.oid = membership.roleid
-        WHERE granted_role.rolname IN (
-            'mottainai_client_catalog_owner',
-            'mottainai_client_profile_owner',
-            'mottainai_client_auth_owner'
-        )
-    ) THEN
-        RAISE EXCEPTION 'A principal is already a member of a client SECURITY DEFINER owner role';
+    SELECT string_agg(
+        format('%I -> %I', granted_role.rolname, member_role.rolname),
+        ', ' ORDER BY granted_role.rolname, member_role.rolname
+    )
+    INTO v_unexpected_members
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN pg_catalog.pg_roles AS granted_role
+      ON granted_role.oid = membership.roleid
+    JOIN pg_catalog.pg_roles AS member_role
+      ON member_role.oid = membership.member
+    WHERE granted_role.rolname IN (
+        'mottainai_client_catalog_owner',
+        'mottainai_client_profile_owner',
+        'mottainai_client_auth_owner'
+    );
+
+    IF v_unexpected_members IS NOT NULL THEN
+        RAISE EXCEPTION
+            'Unexpected client SECURITY DEFINER owner membership: %',
+            v_unexpected_members;
     END IF;
 
     IF EXISTS (
-        SELECT 1 FROM pg_catalog.pg_auth_members
-        WHERE member = v_api_oid
+        SELECT 1
+        FROM pg_catalog.pg_auth_members AS membership
+        WHERE membership.member = v_api_oid
     ) THEN
-        RAISE EXCEPTION 'mottainai_client_api must not inherit membership in another role';
+        RAISE EXCEPTION
+            'mottainai_client_api must not inherit membership in another role';
     END IF;
 END;
 $membership_check$;
