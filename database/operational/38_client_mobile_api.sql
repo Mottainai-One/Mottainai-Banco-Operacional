@@ -70,6 +70,10 @@ REVOKE mottainai_client_catalog_owner,
        mottainai_client_profile_owner,
        mottainai_client_auth_owner
     FROM CURRENT_USER;
+REVOKE mottainai_client_catalog_owner,
+       mottainai_client_profile_owner,
+       mottainai_client_auth_owner
+    FROM SESSION_USER;
 
 DO $membership_check$
 DECLARE
