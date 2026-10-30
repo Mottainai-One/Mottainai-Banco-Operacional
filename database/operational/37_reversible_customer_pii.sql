@@ -344,4 +344,3 @@ INSERT INTO schema_version (
     CURRENT_USER
 )
 ON CONFLICT (version) DO NOTHING;
-
