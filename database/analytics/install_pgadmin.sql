@@ -2295,7 +2295,6 @@ $$;
 
 COMMIT;
 
-SELECT 'Mottainai analytics database installed successfully.' AS result;
 
 -- 15_operational_kpi_facts.sql: BI operational event facts for fresh installs.
 -- Run against MOTTAINAI_ANALITICO after the base analytics schema is installed.
@@ -2520,3 +2519,5 @@ COMMENT ON VIEW vw_alert_action_funnel IS
     'Current statuses by alert cohort; approval is not a historical transition and execution is not proven effective.';
 
 COMMIT;
+
+SELECT 'Mottainai analytics database installed successfully.' AS result;
