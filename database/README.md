@@ -111,3 +111,7 @@ cria e impede que esse grant administrativo seja revogado pelo próprio login.
 O instalador aceita somente essa associação nominal e rejeita qualquer outro
 membro. O login do backend recebe exclusivamente `mottainai_client_api`; nunca
 recebe uma role proprietária ou administrativa.
+
+As funções que estabelecem `app.current_customer_id` são proprietárias das
+roles técnicas de perfil ou autenticação. Somente essas roles recebem `SET` no
+parâmetro; o login da API não pode forjar diretamente o contexto RLS.

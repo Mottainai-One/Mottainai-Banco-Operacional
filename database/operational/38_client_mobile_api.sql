@@ -373,6 +373,20 @@ GRANT EXECUTE ON FUNCTION mottainai.fn_is_sha256_token(TEXT, TEXT),
     mottainai.fn_bootstrap_customer_context(TEXT),
     mottainai.fn_get_current_customer_id()
     TO mottainai_client_profile_owner;
+GRANT EXECUTE ON FUNCTION pg_catalog.set_config(TEXT, TEXT, BOOLEAN)
+    TO mottainai_client_profile_owner;
+GRANT SET ON PARAMETER app.current_customer_id
+    TO mottainai_client_profile_owner;
+
+-- The baseline bootstrap function is SECURITY DEFINER. Assign it to the
+-- least-privilege profile owner so set_config runs with the parameter ACL
+-- granted above instead of depending on the managed migration account.
+ALTER FUNCTION mottainai.fn_bootstrap_customer_context(TEXT)
+    OWNER TO mottainai_client_profile_owner;
+REVOKE ALL ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT)
+    TO mottainai_client_api, mottainai_customer_api;
 
 DROP POLICY IF EXISTS client_profile_owner_customer_select ON mottainai.customer;
 CREATE POLICY client_profile_owner_customer_select ON mottainai.customer

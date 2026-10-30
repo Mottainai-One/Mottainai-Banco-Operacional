@@ -204,6 +204,30 @@ BEGIN
         RAISE EXCEPTION 'SECURITY DEFINER owner roles retain an unauthorized member after installation';
     END IF;
 
+    IF NOT has_parameter_privilege(
+               'mottainai_client_profile_owner',
+               'app.current_customer_id',
+               'SET')
+       OR NOT has_parameter_privilege(
+               'mottainai_client_auth_owner',
+               'app.current_customer_id',
+               'SET') THEN
+        RAISE EXCEPTION 'Mobile API owner roles cannot establish the customer RLS context';
+    END IF;
+
+    IF (
+        SELECT owner_role.rolname
+        FROM pg_proc function_record
+        JOIN pg_namespace function_schema
+          ON function_schema.oid = function_record.pronamespace
+        JOIN pg_roles owner_role ON owner_role.oid = function_record.proowner
+        WHERE function_schema.nspname = 'mottainai'
+          AND function_record.proname = 'fn_bootstrap_customer_context'
+          AND pg_get_function_identity_arguments(function_record.oid) = 'p_external_auth_token text'
+    ) IS DISTINCT FROM 'mottainai_client_profile_owner' THEN
+        RAISE EXCEPTION 'Customer context bootstrap has an unexpected owner';
+    END IF;
+
     IF has_table_privilege(
            'mottainai_client_api', 'mottainai.customer_auth', 'SELECT')
        OR has_table_privilege(
