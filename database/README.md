@@ -106,6 +106,19 @@ views de catálogo filtradas e funções transacionais para cadastro Firebase,
 perfil, login e recuperação. Credenciais, TLS e chaves AES permanecem no secret
 manager/KMS e nunca são versionados no SQL.
 
+## Finalização dos dados pessoais de funcionários
+
+Em bancos existentes, o módulo `28_reversible_employee_pii.sql` cria a área
+criptografada de transição, mas mantém temporariamente as colunas legadas. Após
+o backend/RPA preencher e validar todos os envelopes AES-GCM e identificadores
+de busca, execute `29_finalize_reversible_employee_pii.sql`.
+
+Essa etapa falha antes de qualquer remoção quando encontra criptografia,
+fingerprint ou `firebase_uid` obrigatório incompleto. Quando as validações
+passam, remove `name`, `cpf`, `email` e `phone` de `employee`, além de `cpf` e
+`email` de `app_user`. Os dados protegidos permanecem em
+`employee_private_data`; `app_user` mantém `employee_id` e `firebase_uid`.
+
 No Aiven, o provedor mantém o executor `avnadmin` como membro das roles que ele
 cria e impede que esse grant administrativo seja revogado pelo próprio login.
 O instalador aceita somente essa associação nominal e rejeita qualquer outro
