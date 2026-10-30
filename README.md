@@ -31,7 +31,10 @@ sensitive-data contract and API/RPA compatibility:
   identity columns after encrypted backfill; active accounts require Firebase
   UID, while pending invitations may keep it null;
 - `37_reversible_customer_pii.sql`: optional AES-256-GCM customer identity
-  envelope protected by customer-scoped RLS and excluded from analytics.
+  envelope with logical deletion, permission-scoped staff reads and analytical
+  exclusion;
+- `38_client_mobile_api.sql`: isolated roles, catalog views and transactional
+  functions for Firebase onboarding, profile, login and password recovery.
 
 For a **database already installed locally**, run the incremental update instead
 of reinstalling the entire schema:
@@ -76,7 +79,9 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
 
 The migration is additive. Existing customers remain valid, while the API may
 populate `customer_private_data` when it has the original values. Existing
-SHA-256 tokens cannot be decrypted to backfill the encrypted envelope.
+SHA-256 tokens cannot be decrypted to backfill the encrypted envelope. The same
+updater installs the least-privilege `mottainai_client_api` contract; its real
+server-side login and secret must be provisioned outside the repository.
 
 ## Analytics database
 

@@ -1,6 +1,6 @@
 # Documentação concreta do banco operacional Mottainai
 
-**Versão:** 2026-10-16
+**Versão:** 2026-10-30
 **Database:** `mottainai_operational`
 **Schema:** `mottainai`
 **Finalidade:** servir como fonte transacional oficial para a operação e como contrato de dados para a API.
@@ -100,7 +100,7 @@ disposal 1---N disposal_item
 | PDV | `POST /pos/shifts`, `POST /sales`, `POST /sales/{id}/cancel-requests` | `pos_*`, `sales_transaction`, `sale_item`, `sale_payment`, `fiscal_document` |
 | Alertas e ações | `GET /alerts`, `POST /suggested-actions/{id}/decision` | `alert`, `suggested_action` |
 | Promoções | `GET/POST /promotions`, `POST /promotions/{id}/approve` | `promotion`, `promotion_item` |
-| Clientes e fidelidade | `GET/POST /customers`, `GET /customers/{id}/loyalty`, `POST /loyalty/redemptions` | `customer*`, `loyalty_*` |
+| Clientes e fidelidade | `POST /client/profile`, `GET/PUT /client/profile`, `POST /client/auth/login`, `POST /client/auth/recovery`, `GET /client/loyalty` | `customer*`, `loyalty_*`, funções `fn_api_*customer*` |
 | Logística e perdas | `POST /transfers`, `POST /donations`, `POST /disposals`, `POST /replenishments` | `transfer*`, `donation*`, `disposal*`, `replenishment_*` |
 | Monitoramento | `GET /system/events`, `POST /system/events/{id}/retry`, `GET /system/logs`, `GET /system/jobs` | `event_queue`, `system_log`, `error_log`, `job_log` |
 
@@ -131,6 +131,27 @@ submetidas ao RLS das tabelas de origem; uma view não amplia o tenant do
 usuário. `job_log.company_id` é opcional somente para compatibilidade com
 registros globais antigos. Esses registros com `NULL` não aparecem na API.
 
+### Contrato da API mobile
+
+O módulo `38_client_mobile_api.sql` separa o serviço mobile do cliente da API
+operacional. O login técnico do backend recebe somente
+`mottainai_client_api`; o aplicativo nunca conecta diretamente ao PostgreSQL.
+
+| Objeto | Responsabilidade |
+|---|---|
+| `api_client_catalog_stores` | Lojas ativas e endereço operacional necessário para geofence. |
+| `api_client_catalog_promotions` | Promoções aprovadas, vigentes e com item disponível. |
+| `api_client_catalog_promotion_items` | Itens ativos de promoções elegíveis, sem dados internos. |
+| `fn_api_reserve_customer_id` | Reserva o ID usado como AAD antes de cifrar o envelope. |
+| `fn_api_create_firebase_customer_profile` | Cria cliente tokenizado, envelope e conta de fidelidade atomicamente. |
+| `fn_api_update_firebase_customer_profile` | Atualiza tokens permitidos e substitui o envelope autenticado. |
+| `fn_api_customer_login` | Confere BCrypt, contabiliza falhas e aplica bloqueio temporário. |
+| `fn_api_request_customer_recovery` | Registra somente o BCrypt do segredo de recuperação por 15 minutos. |
+| `fn_api_clear_customer_recovery` | Revoga o segredo quando a entrega externa falha. |
+| `fn_api_validate_customer_recovery` | Valida segredo e expiração sem devolver hashes. |
+| `fn_api_reset_customer_password` | Troca o BCrypt e consome o segredo em uma única operação. |
+| `fn_api_bootstrap_legacy_customer_context` | Inicializa contexto de cliente legado pelo token de e-mail após JWT válido. |
+
 ## Segurança e LGPD
 
 O banco usa defesa em profundidade. A role de grupo `mottainai_api` não possui
@@ -143,7 +164,7 @@ mottainai_api` ao abrir a conexão.
 | Identidade | Login do funcionário usa `firebase_uid`; senhas e códigos de recuperação usam BCrypt; tokens de sessão usam SHA-256 |
 | Dados pessoais | Nome, CPF, e-mail e telefone do funcionário usam AES-256-GCM; documento de venda e identificadores não recuperáveis permanecem tokenizados |
 | Chaves | Chaves AES ficam fora do banco, em KMS/secret manager, com menor privilégio, versão, auditoria e rotação |
-| Cliente | A role `mottainai_customer_api` acessa apenas o cliente autenticado e seus próprios dados de fidelidade |
+| Cliente | `mottainai_customer_api` mantém compatibilidade; `mottainai_client_api` é o contrato isolado do backend mobile e não lê `customer_auth` diretamente |
 | RPA | `legacy_sync_record` mantém correlação e SHA-256 do payload; `mottainai_migrator` limita o contexto de importação |
 | Sessão | `staff_session` controla expiração, rotação, revogação, IP e dispositivo |
 | Tenant | RLS limita empresa e loja; administrador acessa lojas da própria empresa e demais perfis somente sua loja |
@@ -151,7 +172,7 @@ mottainai_api` ao abrir a conexão.
 | Antifraude de contexto | A API não pode executar o setter antigo, chamar `set_config` nem alterar diretamente os parâmetros `app.current_*` |
 | Privilégios | API recebe apenas operações necessárias e não pode executar DDL, manutenção de partição ou alteração de auditoria |
 | Instalação gerenciada | O migrator pode usar `CREATEROLE` sem `SUPERUSER`; atributos privilegiados existentes são verificados e exigem correção administrativa se estiverem ativos |
-| Views | Todas as views da API usam `security_invoker=true` e respeitam o RLS do chamador |
+| Views | Views operacionais usam `security_invoker=true`; views mobile usam `security_barrier=true`, proprietário sem login e filtros explícitos de publicação |
 | Auditoria | Eventos recebem empresa, loja, IP, aplicação e transação; hashes e CPF são removidos do JSON |
 | Disponibilidade | A role da API possui limites de statement, lock e transação ociosa |
 | CI | Instalação limpa, reaplicação, testes de segurança, varredura de segredos e lint SQL |
@@ -179,12 +200,12 @@ Para refresh ou recuperação, use respectivamente
 transação. Nunca devolva hashes, CPF integral, dados de outra empresa ou
 conteúdo de auditoria sem autorização administrativa.
 
-Para o aplicativo do cliente, a API valida o token Firebase, calcula
-`AUTH_SHA256_<64-hex>` e inicializa o contexto isolado:
+Para o aplicativo do cliente, o backend valida o token Firebase, calcula
+`AUTH_SHA256_<64-hex>` e usa a role isolada do serviço mobile:
 
 ```sql
 BEGIN;
-SET LOCAL ROLE mottainai_customer_api;
+SET LOCAL ROLE mottainai_client_api;
 SELECT mottainai.fn_bootstrap_customer_context(:external_auth_token);
 -- consultas permitidas do próprio cliente
 COMMIT;
@@ -253,6 +274,9 @@ entregas independentes:
 4. Execute `finalize_existing_reversible_pii.sql`. O preflight falha sem apagar
    nada se qualquer envelope ou UID estiver incompleto; somente então remove
    `employee.name/cpf/email/phone` e `app_user.cpf/email`.
+5. Execute `update_existing_customer_private_data.sql` para aplicar a retenção
+   lógica do envelope e o contrato da API mobile. A migration não inventa
+   ciphertext a partir de SHA-256 e não cria login nem senha de ambiente.
 
 Faça backup e teste restauração antes da finalização. Os arquivos
 `11_product_company_tests.sql` e
@@ -265,7 +289,14 @@ Render sem colocar credenciais no SQL versionado:
 
 ```sql
 GRANT mottainai_api TO nome_real_do_login_da_api;
+GRANT mottainai_client_api TO nome_real_do_login_da_api_mobile;
 ```
+
+O login mobile deve ser `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+NOBYPASSRLS`. Guarde sua senha no secret manager e configure TLS. As roles
+`mottainai_client_catalog_owner`, `mottainai_client_profile_owner` e
+`mottainai_client_auth_owner` são proprietárias sem login e não podem ser
+concedidas a usuários ou serviços.
 
 O hardening de produto pressupõe a migration que adiciona
 `product.company_id`. Em ambientes atualizados fora de ordem, reaplique
@@ -458,11 +489,12 @@ permanecer nulo para clientes.
 originais do cliente que a aplicação esteja autorizada a tratar. Os tokens de
 `customer` e `customer_auth` continuam sendo usados para buscas e unicidade.
 
-**Relacionamentos:** customer(customer_id) com `ON DELETE CASCADE`.
+**Relacionamentos:** customer(customer_id) com `ON DELETE RESTRICT`. A remoção
+é lógica para preservar evidência e evitar destruição acidental do ciphertext.
 
 | Campo | Definição SQL | Uso |
 |---|---|---|
-| `customer_id` | `INTEGER PRIMARY KEY REFERENCES customer(customer_id) ON DELETE CASCADE` | Garante no máximo um envelope por cliente. |
+| `customer_id` | `INTEGER PRIMARY KEY REFERENCES customer(customer_id) ON DELETE RESTRICT` | Garante no máximo um envelope por cliente. |
 | `payload_ciphertext` | `BYTEA NOT NULL` | JSON_V1 cifrado com AES-256-GCM e tag de autenticação. |
 | `payload_nonce` | `BYTEA NOT NULL` com 12 bytes | Nonce exclusivo; nunca pode ser reutilizado com a mesma chave. |
 | `key_version` | `SMALLINT NOT NULL` positivo | Versão da chave mantida no KMS externo. |
@@ -470,11 +502,16 @@ originais do cliente que a aplicação esteja autorizada a tratar. Os tokens de
 | `payload_format` | `VARCHAR(20) DEFAULT 'JSON_V1'` | Versão do conteúdo cifrado interpretada pela API. |
 | `encrypted_at` | `TIMESTAMPTZ NOT NULL` | Momento de geração do envelope atual. |
 | `created_at`, `updated_at` | `TIMESTAMPTZ NOT NULL` | Auditoria temporal sem expor o conteúdo. |
+| `deleted_at` | `TIMESTAMPTZ` | Retirada lógica; bloqueia as leituras normais sem apagar o envelope. |
 
-A tabela força RLS. Somente `mottainai_customer_api`, após bootstrap do cliente,
-pode selecionar, inserir ou atualizar o próprio envelope. Não há permissão de
-`DELETE` para a API, `mottainai_api` não recebe acesso, e ciphertext/nonce são
-redigidos da auditoria. A chave AES nunca é armazenada no PostgreSQL.
+A tabela força RLS. `mottainai_customer_api` e `mottainai_client_api`, após o
+bootstrap, leem apenas o envelope do próprio cliente. Inserções e substituições
+do envelope mobile ocorrem por funções `SECURITY DEFINER` pertencentes a uma
+role sem login. `mottainai_api` pode ler somente quando o funcionário ativo tem
+nível de gerente/administrador e existe venda válida do cliente na mesma
+empresa; sua única escrita direta é `deleted_at`. Não há `DELETE` físico para
+as APIs. Ciphertext/nonce são redigidos da auditoria e excluídos do analítico.
+A chave AES nunca é armazenada no PostgreSQL.
 
 ### `customer_auth`
 

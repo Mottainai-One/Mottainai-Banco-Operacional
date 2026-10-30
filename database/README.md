@@ -86,3 +86,22 @@ A instalação limpa também executa `36_api_soft_delete_promotion_items.sql`,
 alinhada à Flyway V11 da API Spring. A migration de compatibilidade de promoção
 é repetível e mantém o histórico de itens removidos, permitindo cadastrar
 novamente o mesmo produto na promoção depois da exclusão lógica.
+
+## API mobile do cliente
+
+O contrato final do aplicativo de clientes é instalado pelos módulos
+`37_reversible_customer_pii.sql` e `38_client_mobile_api.sql`. Em um banco
+operacional existente, execute:
+
+```bash
+psql -v ON_ERROR_STOP=1 -d mottainai_operational \
+  -f database/operational/update_existing_customer_private_data.sql
+```
+
+O módulo 37 mantém o envelope AES-256-GCM após a exclusão lógica, impede
+`DELETE` físico e permite leitura administrativa somente para gerente ou
+administrador da mesma empresa com venda válida do cliente. O módulo 38 cria a
+role sem login `mottainai_client_api`, três roles proprietárias sem login,
+views de catálogo filtradas e funções transacionais para cadastro Firebase,
+perfil, login e recuperação. Credenciais, TLS e chaves AES permanecem no secret
+manager/KMS e nunca são versionados no SQL.

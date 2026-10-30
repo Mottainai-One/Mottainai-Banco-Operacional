@@ -36,6 +36,7 @@ COMMIT;
 -- POS compatibility migrations are committed.
 BEGIN;
 \ir 37_reversible_customer_pii.sql
+\ir 38_client_mobile_api.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'
