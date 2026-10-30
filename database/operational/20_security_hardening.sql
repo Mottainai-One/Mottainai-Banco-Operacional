@@ -755,8 +755,47 @@ CREATE POLICY audit_log_read_policy ON audit_log FOR SELECT TO mottainai_api
 
 -- Least privilege for the API group role. DDL, partition maintenance, direct
 -- audit writes, physical deletes, logs and archives remain owner-only.
-REVOKE ALL ON ALL TABLES IN SCHEMA mottainai FROM mottainai_api;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA mottainai FROM mottainai_api;
+DO $$
+DECLARE
+    v_object RECORD;
+BEGIN
+    -- Revoke only objects owned by the migrator. Later modules deliberately
+    -- transfer mobile views/functions to isolated NOLOGIN owner roles; a
+    -- managed non-superuser cannot and must not alter those owners' ACLs when
+    -- install.sql is reapplied.
+    FOR v_object IN
+        SELECT class.relname, class.relkind
+        FROM pg_catalog.pg_class class
+        JOIN pg_catalog.pg_namespace namespace
+          ON namespace.oid = class.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND class.relowner = (SELECT oid FROM pg_catalog.pg_roles
+                                WHERE rolname = current_user)
+          AND class.relkind IN ('r', 'p', 'v', 'm', 'f')
+    LOOP
+        EXECUTE format(
+            'REVOKE ALL ON TABLE mottainai.%I FROM mottainai_api',
+            v_object.relname
+        );
+    END LOOP;
+
+    FOR v_object IN
+        SELECT class.relname
+        FROM pg_catalog.pg_class class
+        JOIN pg_catalog.pg_namespace namespace
+          ON namespace.oid = class.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND class.relowner = (SELECT oid FROM pg_catalog.pg_roles
+                                WHERE rolname = current_user)
+          AND class.relkind = 'S'
+    LOOP
+        EXECUTE format(
+            'REVOKE ALL ON SEQUENCE mottainai.%I FROM mottainai_api',
+            v_object.relname
+        );
+    END LOOP;
+END;
+$$;
 
 GRANT SELECT ON
     subscription_plan,
