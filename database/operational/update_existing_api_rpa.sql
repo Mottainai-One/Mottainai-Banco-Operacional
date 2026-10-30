@@ -7,6 +7,8 @@ BEGIN;
 \ir 22_sensitive_data_contract.sql
 \ir 24_jpa_compatibility.sql
 \ir 25_api_rpa_compatibility.sql
+\ir 37_reversible_customer_pii.sql
+\ir 38_client_mobile_api.sql
 COMMIT;
 
 -- Keep the Spring API soft-delete contract aligned after the compatibility transaction.

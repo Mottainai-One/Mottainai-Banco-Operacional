@@ -137,6 +137,20 @@ ALTER TABLE password_reset_token DROP CONSTRAINT IF EXISTS ck_password_reset_has
 DROP TRIGGER IF EXISTS trg_sync_app_user_cpf ON app_user;
 DROP TRIGGER IF EXISTS trg_propagate_employee_cpf ON employee;
 
+-- A database that already received module 38 has mobile-owner policies whose
+-- expressions depend on the protected customer/auth columns below. PostgreSQL
+-- does not allow ALTER TYPE while such policies exist. The consolidated updater
+-- reapplies module 38 in the same transaction, so remove only those policies
+-- before normalizing the column types.
+DROP POLICY IF EXISTS client_api_customer_select ON customer;
+DROP POLICY IF EXISTS client_profile_owner_customer_select ON customer;
+DROP POLICY IF EXISTS client_profile_owner_customer_insert ON customer;
+DROP POLICY IF EXISTS client_profile_owner_customer_update ON customer;
+DROP POLICY IF EXISTS client_auth_owner_customer_select ON customer;
+DROP POLICY IF EXISTS client_profile_owner_auth_select ON customer_auth;
+DROP POLICY IF EXISTS client_auth_owner_auth_select ON customer_auth;
+DROP POLICY IF EXISTS client_auth_owner_auth_update ON customer_auth;
+
 ALTER TABLE company ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE retail_store ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE supplier ALTER COLUMN phone TYPE VARCHAR(80);
