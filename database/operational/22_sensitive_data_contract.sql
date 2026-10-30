@@ -588,7 +588,29 @@ END;
 $$;
 GRANT USAGE ON SCHEMA mottainai TO mottainai_customer_api;
 
-REVOKE SET ON PARAMETER app.current_customer_id FROM PUBLIC;
+DO $$
+BEGIN
+    -- The first REVOKE materializes the custom-parameter ACL. On a managed
+    -- PostgreSQL reinstall, a later role-specific GRANT may make an identical
+    -- REVOKE unavailable to the non-superuser migrator. Skip it only when the
+    -- catalog already proves that PUBLIC has no SET privilege.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_parameter_acl
+        WHERE parname = 'app.current_customer_id'
+    ) OR EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_parameter_acl parameter_acl
+        CROSS JOIN LATERAL pg_catalog.aclexplode(parameter_acl.paracl) acl
+        WHERE parameter_acl.parname = 'app.current_customer_id'
+          AND acl.grantee = 0
+          AND acl.privilege_type = 'SET'
+    ) THEN
+        EXECUTE
+            'REVOKE SET ON PARAMETER app.current_customer_id FROM PUBLIC';
+    END IF;
+END;
+$$;
 REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(TEXT, TEXT, BOOLEAN)
     FROM mottainai_customer_api;
 
