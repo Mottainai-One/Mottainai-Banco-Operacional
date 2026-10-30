@@ -588,64 +588,66 @@ END;
 $$;
 GRANT USAGE ON SCHEMA mottainai TO mottainai_customer_api;
 
-DO $$
-BEGIN
-    -- The first REVOKE materializes the custom-parameter ACL. On a managed
-    -- PostgreSQL reinstall, a later role-specific GRANT may make an identical
-    -- REVOKE unavailable to the non-superuser migrator. Skip it only when the
-    -- catalog already proves that PUBLIC has no SET privilege.
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_parameter_acl
-        WHERE parname = 'app.current_customer_id'
-    ) OR EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_parameter_acl parameter_acl
-        CROSS JOIN LATERAL pg_catalog.aclexplode(parameter_acl.paracl) acl
-        WHERE parameter_acl.parname = 'app.current_customer_id'
-          AND acl.grantee = 0
-          AND acl.privilege_type = 'SET'
-    ) THEN
-        EXECUTE
-            'REVOKE SET ON PARAMETER app.current_customer_id FROM PUBLIC';
-    END IF;
-END;
-$$;
-REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(TEXT, TEXT, BOOLEAN)
-    FROM mottainai_customer_api;
+CREATE TABLE IF NOT EXISTS api_customer_transaction_context (
+    backend_pid INTEGER PRIMARY KEY,
+    transaction_id BIGINT NOT NULL,
+    customer_id INTEGER NOT NULL,
+    established_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT fk_api_customer_transaction_context_customer
+        FOREIGN KEY (customer_id)
+        REFERENCES customer(customer_id)
+        ON DELETE CASCADE
+);
+REVOKE ALL ON api_customer_transaction_context FROM PUBLIC;
+REVOKE ALL ON api_customer_transaction_context FROM mottainai_customer_api;
 
 CREATE OR REPLACE FUNCTION fn_get_current_customer_id()
 RETURNS INTEGER
 LANGUAGE sql
 STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, mottainai, pg_temp
 AS $$
-    SELECT NULLIF(current_setting('app.current_customer_id', TRUE), '')::INTEGER;
+    SELECT context.customer_id
+    FROM mottainai.api_customer_transaction_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current();
 $$;
 
 CREATE OR REPLACE FUNCTION fn_bootstrap_customer_context(p_external_auth_token TEXT)
 RETURNS INTEGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = mottainai, pg_temp
+SET search_path = pg_catalog, mottainai, pg_temp
 AS $$
 DECLARE
     v_customer_id INTEGER;
 BEGIN
-    IF NOT fn_is_sha256_token(p_external_auth_token, 'AUTH') THEN
+    IF NOT mottainai.fn_is_sha256_token(p_external_auth_token, 'AUTH') THEN
         RETURN NULL;
     END IF;
 
     SELECT customer_id INTO v_customer_id
-    FROM customer
+    FROM mottainai.customer
     WHERE external_auth_uid = p_external_auth_token
-      AND active
+      AND active IS TRUE
       AND deleted_at IS NULL;
 
     IF v_customer_id IS NULL THEN
         RETURN NULL;
     END IF;
 
-    PERFORM set_config('app.current_customer_id', v_customer_id::TEXT, TRUE);
+    INSERT INTO mottainai.api_customer_transaction_context AS context (
+        backend_pid, transaction_id, customer_id, established_at
+    ) VALUES (
+        pg_catalog.pg_backend_pid(), pg_catalog.txid_current(),
+        v_customer_id, pg_catalog.clock_timestamp()
+    )
+    ON CONFLICT (backend_pid) DO UPDATE
+    SET transaction_id = EXCLUDED.transaction_id,
+        customer_id = EXCLUDED.customer_id,
+        established_at = EXCLUDED.established_at;
+
     RETURN v_customer_id;
 END;
 $$;

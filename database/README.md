@@ -112,6 +112,9 @@ O instalador aceita somente essa associação nominal e rejeita qualquer outro
 membro. O login do backend recebe exclusivamente `mottainai_client_api`; nunca
 recebe uma role proprietária ou administrativa.
 
-As funções que estabelecem `app.current_customer_id` são proprietárias das
-roles técnicas de perfil ou autenticação. Somente essas roles recebem `SET` no
-parâmetro; o login da API não pode forjar diretamente o contexto RLS.
+O Aiven não permite ao `avnadmin` conceder ACL de parâmetro como um superusuário
+real. Por isso, o contexto RLS do cliente fica em
+`api_customer_transaction_context`, associado ao PID e à transação atual. A
+tabela é inacessível aos logins das APIs e somente funções `SECURITY DEFINER`
+das roles técnicas de perfil ou autenticação podem gravá-la. Bootstrap e
+operação protegida devem ocorrer na mesma transação.

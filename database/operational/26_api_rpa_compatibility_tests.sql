@@ -204,15 +204,24 @@ BEGIN
         RAISE EXCEPTION 'SECURITY DEFINER owner roles retain an unauthorized member after installation';
     END IF;
 
-    IF NOT has_parameter_privilege(
-               'mottainai_client_profile_owner',
-               'app.current_customer_id',
-               'SET')
-       OR NOT has_parameter_privilege(
-               'mottainai_client_auth_owner',
-               'app.current_customer_id',
-               'SET') THEN
-        RAISE EXCEPTION 'Mobile API owner roles cannot establish the customer RLS context';
+    IF to_regclass('mottainai.api_customer_transaction_context') IS NULL
+       OR has_table_privilege(
+              'mottainai_client_api',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE,DELETE')
+       OR has_table_privilege(
+              'mottainai_customer_api',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE,DELETE')
+       OR NOT has_table_privilege(
+              'mottainai_client_profile_owner',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE')
+       OR NOT has_table_privilege(
+              'mottainai_client_auth_owner',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE') THEN
+        RAISE EXCEPTION 'Transaction-bound customer context grants violate least privilege';
     END IF;
 
     IF (

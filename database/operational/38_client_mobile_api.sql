@@ -281,6 +281,26 @@ ALTER VIEW mottainai.api_client_catalog_promotion_items
 
 RESET ROLE;
 
+-- Aiven does not expose a true PostgreSQL superuser, so parameter ACLs cannot
+-- be granted reliably for a protected custom GUC. Keep the authenticated RLS
+-- context in a private transaction-bound table instead. A backend PID can have
+-- only one row and an old row is ignored unless its transaction ID also matches.
+CREATE TABLE IF NOT EXISTS mottainai.api_customer_transaction_context (
+    backend_pid INTEGER PRIMARY KEY,
+    transaction_id BIGINT NOT NULL,
+    customer_id INTEGER NOT NULL,
+    established_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT fk_api_customer_transaction_context_customer
+        FOREIGN KEY (customer_id)
+        REFERENCES mottainai.customer(customer_id)
+        ON DELETE CASCADE
+);
+ALTER TABLE mottainai.api_customer_transaction_context
+    OWNER TO mottainai_client_profile_owner;
+REVOKE ALL ON mottainai.api_customer_transaction_context FROM PUBLIC;
+REVOKE ALL ON mottainai.api_customer_transaction_context
+    FROM mottainai_client_api, mottainai_customer_api;
+
 GRANT SELECT ON mottainai.api_client_catalog_stores,
                 mottainai.api_client_catalog_promotions,
                 mottainai.api_client_catalog_promotion_items
@@ -373,14 +393,67 @@ GRANT EXECUTE ON FUNCTION mottainai.fn_is_sha256_token(TEXT, TEXT),
     mottainai.fn_bootstrap_customer_context(TEXT),
     mottainai.fn_get_current_customer_id()
     TO mottainai_client_profile_owner;
-GRANT EXECUTE ON FUNCTION pg_catalog.set_config(TEXT, TEXT, BOOLEAN)
-    TO mottainai_client_profile_owner;
-GRANT SET ON PARAMETER app.current_customer_id
+GRANT SELECT, INSERT, UPDATE
+    ON mottainai.api_customer_transaction_context
     TO mottainai_client_profile_owner;
 
--- The baseline bootstrap function is SECURITY DEFINER. Assign it to the
--- least-privilege profile owner so set_config runs with the parameter ACL
--- granted above instead of depending on the managed migration account.
+CREATE OR REPLACE FUNCTION mottainai.fn_get_current_customer_id()
+RETURNS INTEGER
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, mottainai, pg_temp
+AS $function$
+    SELECT context.customer_id
+    FROM mottainai.api_customer_transaction_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current();
+$function$;
+ALTER FUNCTION mottainai.fn_get_current_customer_id()
+    OWNER TO mottainai_client_profile_owner;
+REVOKE ALL ON FUNCTION mottainai.fn_get_current_customer_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION mottainai.fn_get_current_customer_id()
+    TO mottainai_client_api, mottainai_customer_api;
+
+CREATE OR REPLACE FUNCTION mottainai.fn_bootstrap_customer_context(
+    p_external_auth_token TEXT
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, mottainai, pg_temp
+AS $function$
+DECLARE
+    v_customer_id INTEGER;
+BEGIN
+    IF NOT mottainai.fn_is_sha256_token(p_external_auth_token, 'AUTH') THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT customer.customer_id INTO v_customer_id
+    FROM mottainai.customer AS customer
+    WHERE customer.external_auth_uid = p_external_auth_token
+      AND customer.active IS TRUE
+      AND customer.deleted_at IS NULL;
+
+    IF v_customer_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    INSERT INTO mottainai.api_customer_transaction_context AS context (
+        backend_pid, transaction_id, customer_id, established_at
+    ) VALUES (
+        pg_catalog.pg_backend_pid(), pg_catalog.txid_current(),
+        v_customer_id, pg_catalog.clock_timestamp()
+    )
+    ON CONFLICT (backend_pid) DO UPDATE
+    SET transaction_id = EXCLUDED.transaction_id,
+        customer_id = EXCLUDED.customer_id,
+        established_at = EXCLUDED.established_at;
+
+    RETURN v_customer_id;
+END;
+$function$;
 ALTER FUNCTION mottainai.fn_bootstrap_customer_context(TEXT)
     OWNER TO mottainai_client_profile_owner;
 REVOKE ALL ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT)
@@ -448,9 +521,8 @@ GRANT EXECUTE ON FUNCTION mottainai.fn_is_sha256_token(TEXT, TEXT),
     TO mottainai_client_auth_owner;
 GRANT EXECUTE ON FUNCTION public.crypt(TEXT, TEXT)
     TO mottainai_client_auth_owner;
-GRANT EXECUTE ON FUNCTION pg_catalog.set_config(TEXT, TEXT, BOOLEAN)
-    TO mottainai_client_auth_owner;
-GRANT SET ON PARAMETER app.current_customer_id
+GRANT SELECT, INSERT, UPDATE
+    ON mottainai.api_customer_transaction_context
     TO mottainai_client_auth_owner;
 
 DROP POLICY IF EXISTS client_auth_owner_customer_select ON mottainai.customer;
@@ -979,7 +1051,17 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    PERFORM pg_catalog.set_config('app.current_customer_id', v_customer_id::TEXT, TRUE);
+    INSERT INTO mottainai.api_customer_transaction_context AS context (
+        backend_pid, transaction_id, customer_id, established_at
+    ) VALUES (
+        pg_catalog.pg_backend_pid(), pg_catalog.txid_current(),
+        v_customer_id, pg_catalog.clock_timestamp()
+    )
+    ON CONFLICT (backend_pid) DO UPDATE
+    SET transaction_id = EXCLUDED.transaction_id,
+        customer_id = EXCLUDED.customer_id,
+        established_at = EXCLUDED.established_at;
+
     RETURN v_customer_id;
 END;
 $function$;
