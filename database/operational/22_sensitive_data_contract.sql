@@ -598,28 +598,56 @@ CREATE TABLE IF NOT EXISTS api_customer_transaction_context (
         REFERENCES customer(customer_id)
         ON DELETE CASCADE
 );
-REVOKE ALL ON api_customer_transaction_context FROM PUBLIC;
-REVOKE ALL ON api_customer_transaction_context FROM mottainai_customer_api;
+DO $context_table_acl$
+BEGIN
+    -- On managed PostgreSQL the final security module transfers this table to a
+    -- dedicated NOLOGIN owner. A later reinstall must not attempt owner-only
+    -- ACL changes before that module is reached again.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND relation.relname = 'api_customer_transaction_context'
+          AND relation.relkind IN ('r', 'p')
+          AND relation.relowner = pg_catalog.to_regrole(current_user)
+    ) THEN
+        EXECUTE 'REVOKE ALL ON mottainai.api_customer_transaction_context FROM PUBLIC';
+        EXECUTE 'REVOKE ALL ON mottainai.api_customer_transaction_context FROM mottainai_customer_api';
+    END IF;
+END;
+$context_table_acl$;
 
-CREATE OR REPLACE FUNCTION fn_get_current_customer_id()
+DO $context_functions$
+BEGIN
+    IF pg_catalog.to_regprocedure('mottainai.fn_get_current_customer_id()') IS NULL THEN
+        EXECUTE $ddl$
+CREATE FUNCTION mottainai.fn_get_current_customer_id()
 RETURNS INTEGER
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, mottainai, pg_temp
-AS $$
+AS $function$
     SELECT context.customer_id
     FROM mottainai.api_customer_transaction_context AS context
     WHERE context.backend_pid = pg_catalog.pg_backend_pid()
       AND context.transaction_id = pg_catalog.txid_current();
-$$;
+    $function$
+        $ddl$;
+        EXECUTE 'REVOKE ALL ON FUNCTION mottainai.fn_get_current_customer_id() FROM PUBLIC';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION mottainai.fn_get_current_customer_id() TO mottainai_customer_api';
+    END IF;
 
-CREATE OR REPLACE FUNCTION fn_bootstrap_customer_context(p_external_auth_token TEXT)
+    IF pg_catalog.to_regprocedure('mottainai.fn_bootstrap_customer_context(text)') IS NULL THEN
+        EXECUTE $ddl$
+CREATE FUNCTION mottainai.fn_bootstrap_customer_context(p_external_auth_token TEXT)
 RETURNS INTEGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, mottainai, pg_temp
-AS $$
+AS $function$
 DECLARE
     v_customer_id INTEGER;
 BEGIN
@@ -650,12 +678,13 @@ BEGIN
 
     RETURN v_customer_id;
 END;
-$$;
-
-REVOKE ALL ON FUNCTION fn_get_current_customer_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION fn_bootstrap_customer_context(TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION fn_get_current_customer_id() TO mottainai_customer_api;
-GRANT EXECUTE ON FUNCTION fn_bootstrap_customer_context(TEXT) TO mottainai_customer_api;
+    $function$
+        $ddl$;
+        EXECUTE 'REVOKE ALL ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT) FROM PUBLIC';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT) TO mottainai_customer_api';
+    END IF;
+END;
+$context_functions$;
 
 ALTER TABLE customer ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS customer_self_policy ON customer;
