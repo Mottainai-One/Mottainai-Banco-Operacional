@@ -63,6 +63,14 @@ $roles$;
 
 -- Definer-owner roles must never be granted to login or application roles.
 -- The client runtime role must not inherit privileges through any membership.
+-- Recover safely from an older/interrupted execution that left only the
+-- migration account as a temporary member. Memberships held by any other
+-- principal remain a hard failure in the check below.
+REVOKE mottainai_client_catalog_owner,
+       mottainai_client_profile_owner,
+       mottainai_client_auth_owner
+    FROM CURRENT_USER;
+
 DO $membership_check$
 DECLARE
     v_api_oid OID;
