@@ -24,7 +24,18 @@ BEGIN;
 \ir 25_api_rpa_compatibility.sql
 \ir 28_reversible_employee_pii.sql
 \ir 29_finalize_reversible_employee_pii.sql
-\ir 30_reversible_customer_pii.sql
+\ir 30_customer_private_data.sql
+COMMIT;
+
+-- POS API support includes enum changes that must be committed before use.
+-- Keep these incremental migrations outside the installation transaction.
+\ir update_existing_pos_api.sql
+\ir 36_api_soft_delete_promotion_items.sql
+
+-- Final customer security and mobile API contract are applied only after the
+-- POS compatibility migrations are committed.
+BEGIN;
+\ir 37_reversible_customer_pii.sql
 COMMIT;
 
 \echo 'mottainai_operational installed successfully'

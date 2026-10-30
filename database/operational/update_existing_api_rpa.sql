@@ -9,4 +9,7 @@ BEGIN;
 \ir 25_api_rpa_compatibility.sql
 COMMIT;
 
+-- Keep the Spring API soft-delete contract aligned after the compatibility transaction.
+\ir 36_api_soft_delete_promotion_items.sql
+
 \echo 'Operational API and RPA compatibility update completed successfully'

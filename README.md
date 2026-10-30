@@ -23,12 +23,14 @@ sensitive-data contract and API/RPA compatibility:
   compatibility, including creation of `password_reset_token` when absent;
 - `25_api_rpa_compatibility.sql`: API views/functions, missing soft-delete
   columns, enum values, tenant monitoring and controlled legacy-import context.
+- `36_api_soft_delete_promotion_items.sql`: aligns soft-delete and active-item
+  uniqueness for promotions with the Spring API contract.
 - `28_reversible_employee_pii.sql`: transition table for AES-256-GCM employee
   name, CPF, email and phone envelopes plus masked display values;
 - `29_finalize_reversible_employee_pii.sql`: fail-closed removal of employee
   identity columns after encrypted backfill; active accounts require Firebase
   UID, while pending invitations may keep it null;
-- `30_reversible_customer_pii.sql`: optional AES-256-GCM customer identity
+- `37_reversible_customer_pii.sql`: optional AES-256-GCM customer identity
   envelope protected by customer-scoped RLS and excluded from analytics.
 
 For a **database already installed locally**, run the incremental update instead
@@ -40,7 +42,8 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
 ```
 
 `update_existing_api_rpa.sql` runs modules 10, 20, 22, 24 and 25 in one
-transaction. It is repeatable and does not delete existing users or reset
+transaction, then applies module 36 to align soft-deleted promotion items with
+the Spring API. It is repeatable and does not delete existing users or reset
 tokens. The product migration stops if ownership is ambiguous instead of
 guessing a company. Use a database owner or migration role with permission to
 alter tables, create sequences and manage the three group roles. Verify

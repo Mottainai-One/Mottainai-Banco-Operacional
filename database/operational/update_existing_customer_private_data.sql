@@ -1,8 +1,8 @@
 \set ON_ERROR_STOP on
-\echo 'Adding reversible customer private-data storage'
+\echo 'Applying the final customer private-data contract'
 
 BEGIN;
-\ir 30_reversible_customer_pii.sql
+\ir 37_reversible_customer_pii.sql
 COMMIT;
 
-\echo 'Customer private-data storage installed successfully'
+\echo 'Final customer private-data contract installed successfully'

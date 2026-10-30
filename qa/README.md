@@ -24,7 +24,7 @@ O acesso compartilhado à equipe ainda requer um servidor e HTTPS.
 
 ## Etapa 2: API Spring com o banco de QA
 
-Clone `Mottainai-Spring-Api-SQL` ao lado deste repositório. Enquanto a PR da imagem da API não for integrada, use a branch `feature/qa-api-container`; depois use `main`. Acrescente `QA_JWT_SECRET` ao `qa/.env` com um segredo Base64 gerado a partir de pelo menos 32 bytes aleatórios. Não publique esse arquivo.
+Clone `Mottainai-Spring-Api-SQL` ao lado deste repositório e use a branch `main`, que já contém a imagem da API e o contrato atual do banco. Preencha `QA_JWT_SECRET`, `QA_STAFF_DATA_ENCRYPTION_KEY`, `QA_STAFF_DATA_LOOKUP_KEY` e `QA_CUSTOMER_DATA_ENCRYPTION_KEY` em `qa/.env`. As três chaves de dados devem ser valores Base64 distintos, cada um gerado a partir de exatamente 32 bytes aleatórios. Não publique esse arquivo.
 
 Na raiz deste repositório, suba e valide os serviços:
 
