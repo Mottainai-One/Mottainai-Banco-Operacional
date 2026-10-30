@@ -105,3 +105,9 @@ role sem login `mottainai_client_api`, três roles proprietárias sem login,
 views de catálogo filtradas e funções transacionais para cadastro Firebase,
 perfil, login e recuperação. Credenciais, TLS e chaves AES permanecem no secret
 manager/KMS e nunca são versionados no SQL.
+
+No Aiven, o provedor mantém o executor `avnadmin` como membro das roles que ele
+cria e impede que esse grant administrativo seja revogado pelo próprio login.
+O instalador aceita somente essa associação nominal e rejeita qualquer outro
+membro. O login do backend recebe exclusivamente `mottainai_client_api`; nunca
+recebe uma role proprietária ou administrativa.

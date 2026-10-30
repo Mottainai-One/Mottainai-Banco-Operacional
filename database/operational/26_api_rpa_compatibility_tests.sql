@@ -193,13 +193,15 @@ BEGIN
         SELECT 1
         FROM pg_auth_members membership
         JOIN pg_roles owner_role ON owner_role.oid = membership.roleid
+        JOIN pg_roles member_role ON member_role.oid = membership.member
         WHERE owner_role.rolname IN (
             'mottainai_client_catalog_owner',
             'mottainai_client_profile_owner',
             'mottainai_client_auth_owner'
         )
+          AND member_role.rolname <> 'avnadmin'
     ) THEN
-        RAISE EXCEPTION 'SECURITY DEFINER owner roles retain a member after installation';
+        RAISE EXCEPTION 'SECURITY DEFINER owner roles retain an unauthorized member after installation';
     END IF;
 
     IF has_table_privilege(

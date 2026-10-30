@@ -62,18 +62,10 @@ END;
 $roles$;
 
 -- Definer-owner roles must never be granted to login or application roles.
--- The client runtime role must not inherit privileges through any membership.
--- Recover safely from an older/interrupted execution that left only the
--- migration account as a temporary member. Memberships held by any other
--- principal remain a hard failure in the check below.
-REVOKE mottainai_client_catalog_owner,
-       mottainai_client_profile_owner,
-       mottainai_client_auth_owner
-    FROM CURRENT_USER;
-REVOKE mottainai_client_catalog_owner,
-       mottainai_client_profile_owner,
-       mottainai_client_auth_owner
-    FROM SESSION_USER;
+-- Aiven retains its named migration administrator (avnadmin) as a member of
+-- roles it creates and does not let that provider-owned grant be revoked.
+-- Only that exact administrative principal is accepted; every other member
+-- remains a hard failure below.
 
 DO $membership_check$
 DECLARE
@@ -97,7 +89,8 @@ BEGIN
         'mottainai_client_catalog_owner',
         'mottainai_client_profile_owner',
         'mottainai_client_auth_owner'
-    );
+    )
+      AND member_role.rolname <> 'avnadmin';
 
     IF v_unexpected_members IS NOT NULL THEN
         RAISE EXCEPTION
@@ -991,10 +984,29 @@ REVOKE CREATE ON SCHEMA mottainai FROM
     mottainai_client_profile_owner,
     mottainai_client_auth_owner;
 
-REVOKE mottainai_client_catalog_owner,
-       mottainai_client_profile_owner,
-       mottainai_client_auth_owner
-    FROM CURRENT_USER;
+-- Remove only grants issued by this migration principal. The provider-owned
+-- avnadmin creator membership is deliberately retained on Aiven.
+DO $revoke_migration_memberships$
+DECLARE
+    v_role_name TEXT;
+BEGIN
+    FOR v_role_name IN
+        SELECT granted_role.rolname
+        FROM pg_catalog.pg_auth_members AS membership
+        JOIN pg_catalog.pg_roles AS granted_role
+          ON granted_role.oid = membership.roleid
+        WHERE membership.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = CURRENT_USER)
+          AND membership.grantor = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = CURRENT_USER)
+          AND granted_role.rolname IN (
+              'mottainai_client_catalog_owner',
+              'mottainai_client_profile_owner',
+              'mottainai_client_auth_owner'
+          )
+    LOOP
+        EXECUTE format('REVOKE %I FROM CURRENT_USER', v_role_name);
+    END LOOP;
+END;
+$revoke_migration_memberships$;
 
 -- Service integration contracts:
 -- * Firebase onboarding calls fn_api_reserve_customer_id and then
