@@ -257,3 +257,40 @@ CREATE OR REPLACE TRIGGER trg_product_history
     BEFORE UPDATE ON product
     FOR EACH ROW
     EXECUTE FUNCTION fn_trg_product_history();
+
+-- ====================================================================
+-- 26B_TRIGGER_COST.SQL
+-- Recalcula custo medio (RF16) automaticamente ao entrar novo lote.
+-- ====================================================================
+
+CREATE OR REPLACE FUNCTION fn_trg_refresh_product_cost()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_new_avg DECIMAL(10,2);
+    v_old_avg DECIMAL(10,2);
+    v_suggested DECIMAL(10,2);
+BEGIN
+    SELECT avg_cost INTO v_old_avg FROM product WHERE product_id = NEW.product_id;
+
+    v_new_avg := fn_calculate_avg_cost(NEW.product_id);
+    v_suggested := fn_suggest_sale_price(NEW.product_id);
+
+    UPDATE product
+    SET avg_cost = v_new_avg,
+        suggested_price = v_suggested,
+        updated_at = NOW()
+    WHERE product_id = NEW.product_id;
+
+    IF v_old_avg IS NOT NULL AND v_old_avg <> v_new_avg AND NEW.unit_cost > 0 THEN
+        INSERT INTO product_price_history (product_id, old_price, new_price, changed_at)
+        VALUES (NEW.product_id, v_old_avg, v_new_avg, NOW());
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_batch_update_cost
+    AFTER INSERT ON batch
+    FOR EACH ROW
+    EXECUTE FUNCTION fn_trg_refresh_product_cost();

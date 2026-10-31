@@ -3,8 +3,54 @@ name: Database CI
 on:
   pull_request:
   push:
+    branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
+  validate-analytics:
+    name: 0. Validar banco analitico diario
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: mottainai
+          POSTGRES_PASSWORD: mottainai
+          POSTGRES_DB: mottainai_analytics
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mottainai -d mottainai_analytics"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar e testar banco analitico
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/analytics
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Validar reaplicacao idempotente
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/analytics
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f install.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f 13_daily_batch_tests.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f 16_operational_kpi_facts_tests.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f 17_partitioned_operational_kpi_facts_tests.sql
+
   # ============================================================
   # JOB 1: Valida o schema em um PostgreSQL 15 limpo
   # ============================================================
@@ -28,11 +74,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Executar install.sql (schema versionado)
+      - name: Executar install.sql operacional (schema versionado)
         env:
           PGPASSWORD: mottainai
         run: |
-          cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
+
+      - name: Validar reaplicacao das migrations incrementais
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f update_existing_api_rpa.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 11_product_company_tests.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 26_api_rpa_compatibility_tests.sql
+
+      - name: Validar reinstalacao com CPF protegido existente
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f 27_protected_reinstall_fixture.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
 
       - name: Validar schema criado
         env:
@@ -40,11 +104,34 @@ jobs:
         run: |
           psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
 
+      - name: Validar contrato de origem da carga analitica
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai \
+            -v ON_ERROR_STOP=1 -f 39_analytics_source_contract_tests.sql
+
+      - name: Validar administrador gerenciado sem SUPERUSER
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE managed_migrator LOGIN CREATEROLE PASSWORD 'mottainai';" \
+            -c "CREATE DATABASE mottainai_managed OWNER managed_migrator;"
+          cd database/operational
+          psql -h localhost -p 5432 -U managed_migrator -d mottainai_managed \
+            -v ON_ERROR_STOP=1 -f install.sql
+          psql -h localhost -p 5432 -U managed_migrator -d mottainai_managed \
+            -v ON_ERROR_STOP=1 -f install.sql
+
   # ============================================================
-  # JOB 2: Executa o dataLoad 2x (idempotencia) sobre o schema
+  # JOB 2: Valida o dataLoad (artefato exclusivo de TESTE/SEED e nao
+  # parte do install de producao): executado 2x (idempotencia) e com
+  # ASSERTS de quantidade (produtos=60 etc). Nunca roda em producao.
   # ============================================================
   validate-dataload:
-    name: 2. Validar dataLoad (idempotencia)
+    name: 2. Validar dataLoad (teste/seed) com asserts
     runs-on: ubuntu-latest
     needs: validate-schema
     services:
@@ -82,14 +169,50 @@ jobs:
         run: |
           cd script && psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f dataLoad.sql
 
-      - name: Validar carga (60 produtos esperados)
+      - name: Asserts de quantidade (carga de teste/seed)
         env:
           PGPASSWORD: mottainai
         run: |
-          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
-            "SELECT 'produtos=' || count(*) FROM mottainai.product;"
-          psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
-            "SELECT 'batchs=' || count(*) FROM mottainai.batch;"
+          set -e
+          # ASSERT: dataLoad deve inserir exatamente os produtos do loop (1..60)
+          prod=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT count(*) FROM mottainai.product;")
+          echo "produtos=$prod"
+          if [ "$prod" != "60" ]; then
+            echo "ERRO: esperado 60 produtos, encontrado '$prod'"; exit 1
+          fi
+
+          # ASSERT: batch deve conter dados apos a carga (idempotente, nao vazio)
+          batchs=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT count(*) FROM mottainai.batch;")
+          echo "batchs=$batchs"
+          if [ -z "$batchs" ] || [ "$batchs" -lt 1 ]; then
+            echo "ERRO: nenhum batch apos a carga"; exit 1
+          fi
+
+      - name: Executar suite de testes (run_all_tests) - falha em qualquer FAIL
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          set -e
+          # Limpar dados de inventario inseridos pelo dataLoad.sql para evitar
+          # conflitos com test_03_inventory() que insere (store_id=1, batch_id=1).
+          psql -h localhost -p 5432 -U mottainai -d mottainai -c "DELETE FROM mottainai.inventory_movement;"
+          psql -h localhost -p 5432 -U mottainai -d mottainai -c "DELETE FROM mottainai.inventory;"
+          # As funcoes test_0x retornam 'PASS'/'FAIL'. O CI falha se algum
+          # resultado for FAIL, transformando a suite em assert real.
+          # As funcoes vivem em mottainai_analytics (10_tests herda o search_path
+          # de 07_views.sql). Setamos o search_path para que as chamadas internas
+          # unqualified (ex.: test_01_validation()) resolvam nesse schema.
+          out=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tA -c \
+            "SET search_path TO mottainai_analytics, mottainai, public; SELECT test_name, result FROM run_all_tests();")
+          echo "$out"
+          if echo "$out" | grep -q "FAIL"; then
+            echo "ERRO: pelo menos um teste retornou FAIL"; exit 1
+          fi
+          if ! echo "$out" | grep -q "PASS"; then
+            echo "ERRO: nenhum teste retornou PASS (suite vazia?)"; exit 1
+          fi
 
   # ============================================================
   # JOB 3: Sanidade do SQL (regras de estilo essenciais)
@@ -103,7 +226,7 @@ jobs:
       - name: Verificar consistencia do SQL
         run: |
           set -e
-          for f in script/*.sql; do
+          for f in script/*.sql database/operational/*.sql; do
             echo "==> $f"
             # sem tabs
             if grep -Pn "\t" "$f" >/dev/null; then
@@ -230,3 +353,111 @@ jobs:
           sqlfluff lint script/0[0-9]_*.sql script/10_tests.sql script/dataLoad.sql \
             --config /tmp/sqlfluff-full.ini --ignore parsing || true
           echo "Job informativo - nao bloqueia o merge"
+
+  qa-postgres-bootstrap:
+    name: 9. Inicializar PostgreSQL de QA com Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Criar senhas descartaveis para o teste
+        run: |
+          umask 077
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\n' \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > qa/.env
+
+      - name: Validar Compose e instalar schema de QA
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml up -d --wait postgres
+          docker compose --env-file qa/.env -f qa/compose.yaml --profile verify run --rm verify
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml logs --no-color postgres
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml down --volumes
+
+  qa-api-integration:
+    name: 10. API Spring conectada ao PostgreSQL de QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Mottainai-One/Mottainai-Spring-Api-SQL
+          ref: feat/protected-customer-staff-data
+          path: api
+
+      - name: Criar segredos descartaveis para o teste
+        run: |
+          umask 077
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nSTAFF_DATA_ENCRYPTION_KEY=%s\nSTAFF_DATA_LOOKUP_KEY=%s\nCUSTOMER_DATA_ENCRYPTION_KEY=%s\nQA_API_BUILD_CONTEXT=../api\n' \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
+            "$(openssl rand -base64 48 | tr -d '\n')" \
+            "$(openssl rand -base64 32 | tr -d '\n')" \
+            "$(openssl rand -base64 32 | tr -d '\n')" \
+            "$(openssl rand -base64 32 | tr -d '\n')" > qa/.env
+
+      - name: Construir API e validar conexao com banco
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml up -d --wait postgres
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee_private_data'::regclass AND attname = 'cpf_ciphertext' AND NOT attisdropped" | grep -qx cpf_ciphertext
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee'::regclass AND attname = 'cpf_lookup_hmac' AND NOT attisdropped" | grep -qx cpf_lookup_hmac
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee'::regclass AND attname = 'email_lookup_hmac' AND NOT attisdropped" | grep -qx email_lookup_hmac
+          if docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.app_user'::regclass AND attname = 'cpf' AND NOT attisdropped" | grep -qx cpf; then
+            echo "ERRO: app_user.cpf nao deveria existir; o CPF deve ficar no armazenamento privado criptografado"
+            exit 1
+          fi
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml up -d --wait --build api
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml logs --no-color postgres api
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml down --volumes
+
+  qa-ia-integration:
+    name: 11. IA conectada aos servicos de QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Mottainai-One/Mottainai-IA
+          ref: feature/qa-ia-stack
+          path: ia
+
+      - name: Criar credenciais descartaveis
+        run: |
+          umask 077
+          app_password="$(openssl rand -hex 24)"
+          mongo_password="$(openssl rand -hex 24)"
+          redis_password="$(openssl rand -hex 24)"
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_IA_POSTGRES_DSN=postgresql+asyncpg://mottainai_qa_app:%s@postgres:5432/mottainai_qa\nQA_ANALYTICS_ADMIN_PASSWORD=%s\nQA_ANALYTICS_READER_PASSWORD=%s\nQA_IA_JWT_SECRET=%s\nQA_MONGO_USER=qa_mongo_admin\nQA_MONGO_PASSWORD=%s\nQA_REDIS_PASSWORD=%s\nQA_GROQ_API_KEY=\nQA_IA_BUILD_CONTEXT=../ia\n' \
+            "$(openssl rand -hex 24)" "$app_password" "$app_password" \
+            "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
+            "$(openssl rand -base64 48 | tr -d '\n')" "$mongo_password" "$redis_password" > qa/.env
+
+      - name: Iniciar IA e verificar readiness
+        run: |
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml config --quiet
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml up -d --wait --build ia
+          docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml --profile verify run --rm verify-ia
+
+      - name: Mostrar logs em caso de falha
+        if: failure()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml logs --no-color postgres analytics-postgres mongo redis ia
+
+      - name: Encerrar contêineres descartaveis
+        if: always()
+        run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml down --volumes
