@@ -1320,6 +1320,7 @@ INSERT INTO etl_source_contract (
     ('supplier_history', 620, 'INCREMENTAL', 'changed_at', 'dim_supplier', 'BUSINESS', TRUE, TRUE, 'Supplier attribute history without contacts'),
     ('product_price_history', 630, 'INCREMENTAL', 'changed_at', 'dim_product', 'BUSINESS', TRUE, TRUE, 'Product price history'),
     ('system_rule', 640, 'INCREMENTAL', 'updated_at', 'engine_suggestion', 'BUSINESS', TRUE, TRUE, 'Rules used to explain analytical recommendations'),
+    ('customer_private_data', 898, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Encrypted customer identity envelopes never enter analytics'),
     ('employee_private_data', 899, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Encrypted identity envelopes and masks never enter analytics'),
     ('app_user', 900, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Authentication accounts never enter analytics'),
     ('customer_auth', 901, 'SNAPSHOT', NULL, NULL, 'EXCLUDED', FALSE, FALSE, 'Customer credentials never enter analytics'),
@@ -1362,6 +1363,7 @@ BEGIN
                 'code_hash', 'firebase_uid', 'address_token', 'street',
                 'number', 'neighborhood', 'zip_code', 'old_data', 'new_data',
                 'stack_trace', 'parameters', 'payload', 'response',
+                'payload_ciphertext', 'payload_nonce', 'payload_format',
                 'name_ciphertext', 'name_nonce', 'name_token', 'name_masked',
                 'cpf_ciphertext', 'cpf_nonce', 'cpf_masked',
                 'email_ciphertext', 'email_nonce', 'email_token', 'email_masked',
@@ -2130,7 +2132,7 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM etl_source_contract
         WHERE source_table IN (
-            'employee_private_data', 'app_user', 'customer_auth', 'staff_session',
+            'customer_private_data', 'employee_private_data', 'app_user', 'customer_auth', 'staff_session',
             'password_reset_token', 'integration_log'
         )
           AND (enabled OR payload_policy <> 'EXCLUDED')
@@ -2144,6 +2146,8 @@ BEGIN
         '{"employee_id":1,"email_masked":"a***@example.com"}'::jsonb
     ) OR NOT fn_payload_has_forbidden_key(
         '{"employee_id":1,"cpf_ciphertext":"secret"}'::jsonb
+    ) OR NOT fn_payload_has_forbidden_key(
+        '{"customer_id":1,"payload_ciphertext":"secret"}'::jsonb
     ) THEN
         RAISE EXCEPTION 'Encrypted or masked identity fields are not blocked from analytics';
     END IF;

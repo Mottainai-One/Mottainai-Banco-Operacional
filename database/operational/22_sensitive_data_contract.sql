@@ -137,6 +137,20 @@ ALTER TABLE password_reset_token DROP CONSTRAINT IF EXISTS ck_password_reset_has
 DROP TRIGGER IF EXISTS trg_sync_app_user_cpf ON app_user;
 DROP TRIGGER IF EXISTS trg_propagate_employee_cpf ON employee;
 
+-- A database that already received module 38 has mobile-owner policies whose
+-- expressions depend on the protected customer/auth columns below. PostgreSQL
+-- does not allow ALTER TYPE while such policies exist. The consolidated updater
+-- reapplies module 38 in the same transaction, so remove only those policies
+-- before normalizing the column types.
+DROP POLICY IF EXISTS client_api_customer_select ON customer;
+DROP POLICY IF EXISTS client_profile_owner_customer_select ON customer;
+DROP POLICY IF EXISTS client_profile_owner_customer_insert ON customer;
+DROP POLICY IF EXISTS client_profile_owner_customer_update ON customer;
+DROP POLICY IF EXISTS client_auth_owner_customer_select ON customer;
+DROP POLICY IF EXISTS client_profile_owner_auth_select ON customer_auth;
+DROP POLICY IF EXISTS client_auth_owner_auth_select ON customer_auth;
+DROP POLICY IF EXISTS client_auth_owner_auth_update ON customer_auth;
+
 ALTER TABLE company ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE retail_store ALTER COLUMN phone TYPE VARCHAR(80);
 ALTER TABLE supplier ALTER COLUMN phone TYPE VARCHAR(80);
@@ -574,50 +588,103 @@ END;
 $$;
 GRANT USAGE ON SCHEMA mottainai TO mottainai_customer_api;
 
-REVOKE SET ON PARAMETER app.current_customer_id FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pg_catalog.set_config(TEXT, TEXT, BOOLEAN)
-    FROM mottainai_customer_api;
+CREATE TABLE IF NOT EXISTS api_customer_transaction_context (
+    backend_pid INTEGER PRIMARY KEY,
+    transaction_id BIGINT NOT NULL,
+    customer_id INTEGER NOT NULL,
+    established_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT fk_api_customer_transaction_context_customer
+        FOREIGN KEY (customer_id)
+        REFERENCES customer(customer_id)
+        ON DELETE CASCADE
+);
+DO $context_table_acl$
+BEGIN
+    -- On managed PostgreSQL the final security module transfers this table to a
+    -- dedicated NOLOGIN owner. A later reinstall must not attempt owner-only
+    -- ACL changes before that module is reached again.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_namespace AS namespace
+          ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND relation.relname = 'api_customer_transaction_context'
+          AND relation.relkind IN ('r', 'p')
+          AND relation.relowner = pg_catalog.to_regrole(current_user)
+    ) THEN
+        EXECUTE 'REVOKE ALL ON mottainai.api_customer_transaction_context FROM PUBLIC';
+        EXECUTE 'REVOKE ALL ON mottainai.api_customer_transaction_context FROM mottainai_customer_api';
+    END IF;
+END;
+$context_table_acl$;
 
-CREATE OR REPLACE FUNCTION fn_get_current_customer_id()
+DO $context_functions$
+BEGIN
+    IF pg_catalog.to_regprocedure('mottainai.fn_get_current_customer_id()') IS NULL THEN
+        EXECUTE $ddl$
+CREATE FUNCTION mottainai.fn_get_current_customer_id()
 RETURNS INTEGER
 LANGUAGE sql
 STABLE
-AS $$
-    SELECT NULLIF(current_setting('app.current_customer_id', TRUE), '')::INTEGER;
-$$;
+SECURITY DEFINER
+SET search_path = pg_catalog, mottainai, pg_temp
+AS $function$
+    SELECT context.customer_id
+    FROM mottainai.api_customer_transaction_context AS context
+    WHERE context.backend_pid = pg_catalog.pg_backend_pid()
+      AND context.transaction_id = pg_catalog.txid_current();
+    $function$
+        $ddl$;
+        EXECUTE 'REVOKE ALL ON FUNCTION mottainai.fn_get_current_customer_id() FROM PUBLIC';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION mottainai.fn_get_current_customer_id() TO mottainai_customer_api';
+    END IF;
 
-CREATE OR REPLACE FUNCTION fn_bootstrap_customer_context(p_external_auth_token TEXT)
+    IF pg_catalog.to_regprocedure('mottainai.fn_bootstrap_customer_context(text)') IS NULL THEN
+        EXECUTE $ddl$
+CREATE FUNCTION mottainai.fn_bootstrap_customer_context(p_external_auth_token TEXT)
 RETURNS INTEGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = mottainai, pg_temp
-AS $$
+SET search_path = pg_catalog, mottainai, pg_temp
+AS $function$
 DECLARE
     v_customer_id INTEGER;
 BEGIN
-    IF NOT fn_is_sha256_token(p_external_auth_token, 'AUTH') THEN
+    IF NOT mottainai.fn_is_sha256_token(p_external_auth_token, 'AUTH') THEN
         RETURN NULL;
     END IF;
 
     SELECT customer_id INTO v_customer_id
-    FROM customer
+    FROM mottainai.customer
     WHERE external_auth_uid = p_external_auth_token
-      AND active
+      AND active IS TRUE
       AND deleted_at IS NULL;
 
     IF v_customer_id IS NULL THEN
         RETURN NULL;
     END IF;
 
-    PERFORM set_config('app.current_customer_id', v_customer_id::TEXT, TRUE);
+    INSERT INTO mottainai.api_customer_transaction_context AS context (
+        backend_pid, transaction_id, customer_id, established_at
+    ) VALUES (
+        pg_catalog.pg_backend_pid(), pg_catalog.txid_current(),
+        v_customer_id, pg_catalog.clock_timestamp()
+    )
+    ON CONFLICT (backend_pid) DO UPDATE
+    SET transaction_id = EXCLUDED.transaction_id,
+        customer_id = EXCLUDED.customer_id,
+        established_at = EXCLUDED.established_at;
+
     RETURN v_customer_id;
 END;
-$$;
-
-REVOKE ALL ON FUNCTION fn_get_current_customer_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION fn_bootstrap_customer_context(TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION fn_get_current_customer_id() TO mottainai_customer_api;
-GRANT EXECUTE ON FUNCTION fn_bootstrap_customer_context(TEXT) TO mottainai_customer_api;
+    $function$
+        $ddl$;
+        EXECUTE 'REVOKE ALL ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT) FROM PUBLIC';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION mottainai.fn_bootstrap_customer_context(TEXT) TO mottainai_customer_api';
+    END IF;
+END;
+$context_functions$;
 
 ALTER TABLE customer ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS customer_self_policy ON customer;
@@ -706,7 +773,10 @@ BEGIN
                     'password', 'password_hash', 'token', 'token_hash',
                     'refresh_token', 'refresh_token_hash', 'recovery_token_hash',
                     'cpf', 'customer_document', 'email', 'login_email', 'phone',
-                    'full_name', 'birth_date', 'external_auth_uid', 'address_token'
+                    'full_name', 'birth_date', 'external_auth_uid', 'address_token',
+                    'payload_ciphertext', 'payload_nonce',
+                    'name_ciphertext', 'name_nonce', 'cpf_ciphertext', 'cpf_nonce',
+                    'email_ciphertext', 'email_nonce', 'phone_ciphertext', 'phone_nonce'
                 ]) THEN '"[REDACTED]"'::JSONB
                 ELSE fn_sanitize_audit_json(entry.value)
             END)

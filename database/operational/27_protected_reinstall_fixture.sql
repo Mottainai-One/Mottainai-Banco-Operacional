@@ -55,8 +55,11 @@ BEGIN
     )
     RETURNING store_id INTO v_store_id;
 
-    INSERT INTO employee (store_id, role_id, active)
-    VALUES (v_store_id, v_role_id, FALSE)
+    INSERT INTO employee (
+        store_id, role_id, active, cpf_lookup_hmac
+    ) VALUES (
+        v_store_id, v_role_id, FALSE, decode(repeat('77', 32), 'hex')
+    )
     RETURNING employee_id INTO v_employee_id;
 
     INSERT INTO employee_private_data (

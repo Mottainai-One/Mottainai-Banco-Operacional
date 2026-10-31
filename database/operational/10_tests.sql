@@ -9,7 +9,8 @@ BEGIN
     FROM (VALUES
         ('product'), ('inventory'), ('sales_transaction'),
         ('store_product_price'), ('inventory_count'),
-        ('password_reset_token'), ('event_queue')
+        ('password_reset_token'), ('event_queue'),
+        ('customer_private_data')
     ) AS required(name)
     WHERE to_regclass('mottainai.' || required.name) IS NULL;
 
@@ -49,6 +50,69 @@ BEGIN
           AND column_name = 'cpf_ciphertext'
     ) THEN
         RAISE EXCEPTION 'employee_private_data.cpf_ciphertext is missing';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'customer_private_data'
+          AND column_name = 'deleted_at'
+    ) THEN
+        RAISE EXCEPTION 'customer_private_data.deleted_at is required for logical deletion';
+    END IF;
+
+    IF has_table_privilege('mottainai_api', 'mottainai.customer_private_data', 'DELETE') THEN
+        RAISE EXCEPTION 'mottainai_api must not physically delete customer private data';
+    END IF;
+
+    IF has_table_privilege('mottainai_customer_api', 'mottainai.customer_private_data', 'DELETE') THEN
+        RAISE EXCEPTION 'mottainai_customer_api must not physically delete customer private data';
+    END IF;
+
+    IF NOT has_table_privilege('mottainai_api', 'mottainai.customer_private_data', 'SELECT') THEN
+        RAISE EXCEPTION 'mottainai_api needs permission-scoped SELECT for authorized staff reads';
+    END IF;
+
+    IF NOT (
+        SELECT relrowsecurity AND relforcerowsecurity
+        FROM pg_class
+        WHERE oid = 'mottainai.customer_private_data'::regclass
+    ) THEN
+        RAISE EXCEPTION 'customer_private_data must enable and force row-level security';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policy
+        WHERE polrelid = 'mottainai.customer_private_data'::regclass
+          AND polname = 'customer_private_data_staff_select_policy'
+          AND polcmd = 'r'
+    ) THEN
+        RAISE EXCEPTION 'Permission-scoped staff SELECT policy is missing';
+    END IF;
+
+    IF NOT has_column_privilege(
+        'mottainai_api', 'mottainai.customer_private_data', 'deleted_at', 'UPDATE'
+    ) THEN
+        RAISE EXCEPTION 'mottainai_api needs column-scoped UPDATE to perform logical deletion';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgrelid = 'mottainai.customer'::regclass
+          AND tgname = 'trg_mark_customer_private_data_deleted'
+          AND NOT tgisinternal
+    ) THEN
+        RAISE EXCEPTION 'Customer inactivation must logically delete the private-data envelope';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'mottainai.customer_private_data'::regclass
+          AND conname = 'fk_customer_private_data_customer'
+          AND confdeltype = 'r'
+    ) THEN
+        RAISE EXCEPTION 'Customer private-data foreign key must restrict physical deletion';
     END IF;
 
     IF (

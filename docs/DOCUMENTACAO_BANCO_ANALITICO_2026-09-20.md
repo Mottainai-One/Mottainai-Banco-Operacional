@@ -99,7 +99,8 @@ promoções, fidelidade, logística, perdas, reposição e históricos. Fontes
 incrementais usam watermark; `inventory` é recebido como snapshot integral no
 fim do turno para formar `fact_inventory_snapshot`.
 
-São explicitamente excluídos: `employee_private_data`, `app_user`,
+São explicitamente excluídos: `customer_private_data`,
+`employee_private_data`, `app_user`,
 `customer_auth`, `staff_session`,
 `password_reset_token`, auditoria, logs técnicos, payloads de integração,
 `event_queue` e metadados do legado. O módulo de clientes envia apenas chave

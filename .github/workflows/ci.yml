@@ -374,13 +374,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: Mottainai-One/Mottainai-Spring-Api-SQL
-          ref: main
+          ref: feat/protected-customer-staff-data
           path: api
 
       - name: Criar segredos descartaveis para o teste
         run: |
           umask 077
-          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nQA_STAFF_DATA_ENCRYPTION_KEY=%s\nQA_STAFF_DATA_LOOKUP_KEY=%s\nQA_CUSTOMER_DATA_ENCRYPTION_KEY=%s\nQA_API_BUILD_CONTEXT=../api\n' \
+          printf 'QA_DB_ADMIN_PASSWORD=%s\nQA_DB_APP_PASSWORD=%s\nQA_JWT_SECRET=%s\nSTAFF_DATA_ENCRYPTION_KEY=%s\nSTAFF_DATA_LOOKUP_KEY=%s\nCUSTOMER_DATA_ENCRYPTION_KEY=%s\nQA_API_BUILD_CONTEXT=../api\n' \
             "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" \
             "$(openssl rand -base64 48 | tr -d '\n')" \
             "$(openssl rand -base64 32 | tr -d '\n')" \
@@ -392,6 +392,12 @@ jobs:
           docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml config --quiet
           docker compose --env-file qa/.env -f qa/compose.yaml up -d --wait postgres
           docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee_private_data'::regclass AND attname = 'cpf_ciphertext' AND NOT attisdropped" | grep -qx cpf_ciphertext
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee'::regclass AND attname = 'cpf_lookup_hmac' AND NOT attisdropped" | grep -qx cpf_lookup_hmac
+          docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.employee'::regclass AND attname = 'email_lookup_hmac' AND NOT attisdropped" | grep -qx email_lookup_hmac
+          if docker compose --env-file qa/.env -f qa/compose.yaml exec -T postgres psql -U qa_admin -d mottainai_qa -v ON_ERROR_STOP=1 -tAc "SELECT attname FROM pg_attribute WHERE attrelid = 'mottainai.app_user'::regclass AND attname = 'cpf' AND NOT attisdropped" | grep -qx cpf; then
+            echo "ERRO: app_user.cpf nao deveria existir; o CPF deve ficar no armazenamento privado criptografado"
+            exit 1
+          fi
           docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml up -d --wait --build api
           docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.api.yaml --profile verify run --rm verify-api
 

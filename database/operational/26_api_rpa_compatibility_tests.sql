@@ -17,7 +17,8 @@ BEGIN
     FROM (VALUES
         ('inventory_count_item', 'deleted_at'),
         ('purchase_order_item', 'deleted_at'),
-        ('job_log', 'company_id')
+        ('job_log', 'company_id'),
+        ('promotion_item', 'deleted_at')
     ) AS required(table_name, column_name)
     WHERE NOT EXISTS (
         SELECT 1
@@ -33,6 +34,262 @@ BEGIN
 
     IF to_regclass('mottainai.employee_private_data') IS NULL THEN
         RAISE EXCEPTION 'Reversible employee private-data table is missing';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'email_lookup_hmac'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'employee'
+          AND indexname = 'uq_employee_email_lookup_hmac'
+    ) THEN
+        RAISE EXCEPTION 'Employee email uniqueness fingerprint is missing';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'mottainai'
+          AND table_name = 'employee'
+          AND column_name = 'cpf_lookup_hmac'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'employee'
+          AND indexname = 'uq_employee_cpf_lookup_hmac'
+    ) THEN
+        RAISE EXCEPTION 'Employee CPF uniqueness fingerprint is missing';
+    END IF;
+
+    IF to_regclass('mottainai.customer_private_data') IS NULL THEN
+        RAISE EXCEPTION 'Reversible customer private-data table is missing';
+    END IF;
+
+    SELECT string_agg(required.column_name, ', ' ORDER BY required.column_name)
+    INTO v_missing
+    FROM (VALUES
+        ('payload_ciphertext'), ('payload_nonce'), ('key_version'),
+        ('algorithm'), ('payload_format'), ('encrypted_at'), ('deleted_at')
+    ) AS required(column_name)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM information_schema.columns AS columns
+        WHERE columns.table_schema = 'mottainai'
+          AND columns.table_name = 'customer_private_data'
+          AND columns.column_name = required.column_name
+    );
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Customer private-data columns are missing: %', v_missing;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND relation.relname = 'customer_private_data'
+          AND relation.relrowsecurity
+          AND relation.relforcerowsecurity
+    ) THEN
+        RAISE EXCEPTION 'Customer private-data RLS must be enabled and forced';
+    END IF;
+
+    IF NOT has_table_privilege(
+           'mottainai_api', 'mottainai.customer_private_data', 'SELECT')
+       OR NOT has_column_privilege(
+           'mottainai_api', 'mottainai.customer_private_data',
+           'deleted_at', 'UPDATE')
+       OR has_column_privilege(
+           'mottainai_api', 'mottainai.customer_private_data',
+           'payload_ciphertext', 'UPDATE')
+       OR has_table_privilege(
+           'mottainai_api', 'mottainai.customer_private_data', 'INSERT')
+       OR has_table_privilege(
+           'mottainai_api', 'mottainai.customer_private_data', 'DELETE')
+       OR NOT has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'SELECT')
+       OR NOT has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'INSERT')
+       OR NOT has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'UPDATE')
+       OR has_table_privilege(
+           'mottainai_customer_api', 'mottainai.customer_private_data', 'DELETE') THEN
+        RAISE EXCEPTION 'Customer private-data privileges violate least privilege';
+    END IF;
+
+    SELECT string_agg(required.policy_name, ', ' ORDER BY required.policy_name)
+    INTO v_missing
+    FROM (VALUES
+        ('customer_private_data_select_policy', 'SELECT'),
+        ('customer_private_data_insert_policy', 'INSERT'),
+        ('customer_private_data_update_policy', 'UPDATE'),
+        ('customer_private_data_staff_select_policy', 'SELECT'),
+        ('customer_private_data_staff_soft_delete_policy', 'UPDATE'),
+        ('customer_private_data_lifecycle_soft_delete_policy', 'UPDATE'),
+        ('client_api_private_data_select', 'SELECT'),
+        ('client_profile_owner_private_select', 'SELECT'),
+        ('client_profile_owner_private_insert', 'INSERT'),
+        ('client_profile_owner_private_update', 'UPDATE')
+    ) AS required(policy_name, command)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'customer_private_data'
+          AND policyname = required.policy_name
+          AND cmd = required.command
+    );
+
+    IF v_missing IS NOT NULL OR EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'mottainai'
+          AND tablename = 'customer_private_data'
+          AND policyname = 'customer_private_data_self_policy'
+    ) THEN
+        RAISE EXCEPTION 'Customer private-data RLS policies are incomplete or overly broad: %',
+            COALESCE(v_missing, 'legacy FOR ALL policy');
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'mottainai.customer_private_data'::regclass
+          AND contype = 'f'
+          AND confrelid = 'mottainai.customer'::regclass
+          AND confdeltype = 'r'
+    ) THEN
+        RAISE EXCEPTION 'Customer private-data must retain envelopes with ON DELETE RESTRICT';
+    END IF;
+
+    IF fn_sanitize_audit_json(
+        '{"payload_ciphertext":"secret","payload_nonce":"secret"}'::JSONB
+       )->>'payload_ciphertext' <> '[REDACTED]' THEN
+        RAISE EXCEPTION 'Encrypted customer payload is not redacted from logs';
+    END IF;
+
+    SELECT string_agg(required.role_name, ', ' ORDER BY required.role_name)
+    INTO v_missing
+    FROM (VALUES
+        ('mottainai_client_api'),
+        ('mottainai_client_catalog_owner'),
+        ('mottainai_client_profile_owner'),
+        ('mottainai_client_auth_owner')
+    ) AS required(role_name)
+    LEFT JOIN pg_roles role_record ON role_record.rolname = required.role_name
+    WHERE role_record.oid IS NULL
+       OR role_record.rolcanlogin
+       OR role_record.rolsuper
+       OR role_record.rolcreaterole
+       OR role_record.rolcreatedb
+       OR role_record.rolreplication
+       OR role_record.rolbypassrls;
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Mobile API roles are missing or privileged: %', v_missing;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_auth_members membership
+        JOIN pg_roles owner_role ON owner_role.oid = membership.roleid
+        JOIN pg_roles member_role ON member_role.oid = membership.member
+        WHERE owner_role.rolname IN (
+            'mottainai_client_catalog_owner',
+            'mottainai_client_profile_owner',
+            'mottainai_client_auth_owner'
+        )
+          AND member_role.rolname <> 'avnadmin'
+    ) THEN
+        RAISE EXCEPTION 'SECURITY DEFINER owner roles retain an unauthorized member after installation';
+    END IF;
+
+    IF to_regclass('mottainai.api_customer_transaction_context') IS NULL
+       OR has_table_privilege(
+              'mottainai_client_api',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE,DELETE')
+       OR has_table_privilege(
+              'mottainai_customer_api',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE,DELETE')
+       OR NOT has_table_privilege(
+              'mottainai_client_profile_owner',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE')
+       OR NOT has_table_privilege(
+              'mottainai_client_auth_owner',
+              'mottainai.api_customer_transaction_context',
+              'SELECT,INSERT,UPDATE') THEN
+        RAISE EXCEPTION 'Transaction-bound customer context grants violate least privilege';
+    END IF;
+
+    IF (
+        SELECT owner_role.rolname
+        FROM pg_proc function_record
+        JOIN pg_namespace function_schema
+          ON function_schema.oid = function_record.pronamespace
+        JOIN pg_roles owner_role ON owner_role.oid = function_record.proowner
+        WHERE function_schema.nspname = 'mottainai'
+          AND function_record.proname = 'fn_bootstrap_customer_context'
+          AND pg_get_function_identity_arguments(function_record.oid) = 'p_external_auth_token text'
+    ) IS DISTINCT FROM 'mottainai_client_profile_owner' THEN
+        RAISE EXCEPTION 'Customer context bootstrap has an unexpected owner';
+    END IF;
+
+    IF has_table_privilege(
+           'mottainai_client_api', 'mottainai.customer_auth', 'SELECT')
+       OR has_table_privilege(
+           'mottainai_client_api', 'mottainai.customer', 'INSERT')
+       OR has_table_privilege(
+           'mottainai_client_api', 'mottainai.customer_private_data', 'UPDATE')
+       OR NOT has_table_privilege(
+           'mottainai_client_api', 'mottainai.api_client_catalog_stores', 'SELECT')
+       OR NOT has_table_privilege(
+           'mottainai_client_api', 'mottainai.api_client_catalog_promotions', 'SELECT')
+       OR NOT has_table_privilege(
+           'mottainai_client_api', 'mottainai.api_client_catalog_promotion_items', 'SELECT') THEN
+        RAISE EXCEPTION 'Mobile API grants violate least privilege';
+    END IF;
+
+    SELECT string_agg(required.view_name, ', ' ORDER BY required.view_name)
+    INTO v_missing
+    FROM (VALUES
+        ('api_client_catalog_stores'),
+        ('api_client_catalog_promotions'),
+        ('api_client_catalog_promotion_items')
+    ) AS required(view_name)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'mottainai'
+          AND relation.relname = required.view_name
+          AND relation.relkind = 'v'
+          AND 'security_barrier=true' = ANY (relation.reloptions)
+    );
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Secure mobile catalog views are missing: %', v_missing;
+    END IF;
+
+    SELECT string_agg(required.signature, ', ' ORDER BY required.signature)
+    INTO v_missing
+    FROM (VALUES
+        ('mottainai.fn_api_reserve_customer_id()'),
+        ('mottainai.fn_api_create_firebase_customer_profile(integer,text,text,text,text,text,text,smallint,boolean,bytea,bytea,smallint,timestamp without time zone)'),
+        ('mottainai.fn_api_update_firebase_customer_profile(text,text,text,boolean,bytea,bytea,smallint,timestamp without time zone)'),
+        ('mottainai.fn_api_customer_login(text,text,timestamp without time zone)'),
+        ('mottainai.fn_api_request_customer_recovery(text,text,timestamp without time zone)'),
+        ('mottainai.fn_api_clear_customer_recovery(integer,text,timestamp without time zone)'),
+        ('mottainai.fn_api_validate_customer_recovery(integer,text,timestamp without time zone)'),
+        ('mottainai.fn_api_reset_customer_password(integer,text,text,timestamp without time zone)'),
+        ('mottainai.fn_api_bootstrap_legacy_customer_context(text)')
+    ) AS required(signature)
+    WHERE to_regprocedure(required.signature) IS NULL;
+
+    IF v_missing IS NOT NULL THEN
+        RAISE EXCEPTION 'Mobile API functions are missing: %', v_missing;
     END IF;
 
     IF EXISTS (
@@ -162,6 +419,60 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'API and RPA structural compatibility tests passed';
+END;
+$$;
+
+DO $$
+DECLARE
+    v_customer_id INTEGER;
+    v_deleted_at TIMESTAMPTZ;
+    v_delete_restricted BOOLEAN := FALSE;
+BEGIN
+    BEGIN
+        INSERT INTO customer (full_name, active)
+        VALUES ('CUS_SHA256_' || repeat('A', 64), TRUE)
+        RETURNING customer_id INTO v_customer_id;
+
+        INSERT INTO customer_private_data (
+            customer_id, payload_ciphertext, payload_nonce, key_version
+        ) VALUES (
+            v_customer_id,
+            decode(repeat('AB', 17), 'hex'),
+            decode(repeat('CD', 12), 'hex'),
+            1
+        );
+
+        UPDATE customer SET active = FALSE
+        WHERE customer_id = v_customer_id;
+
+        SELECT deleted_at INTO v_deleted_at
+        FROM customer_private_data
+        WHERE customer_id = v_customer_id;
+
+        IF v_deleted_at IS NULL THEN
+            RAISE EXCEPTION 'Customer private-data lifecycle trigger did not apply soft deletion';
+        END IF;
+
+        BEGIN
+            DELETE FROM customer WHERE customer_id = v_customer_id;
+        EXCEPTION WHEN foreign_key_violation THEN
+            v_delete_restricted := TRUE;
+        END;
+
+        IF NOT v_delete_restricted THEN
+            RAISE EXCEPTION 'Customer private-data foreign key allowed physical deletion';
+        END IF;
+
+        RAISE EXCEPTION USING
+            ERRCODE = 'P0001',
+            MESSAGE = 'rollback-customer-private-data-lifecycle-test';
+    EXCEPTION WHEN SQLSTATE 'P0001' THEN
+        IF SQLERRM <> 'rollback-customer-private-data-lifecycle-test' THEN
+            RAISE;
+        END IF;
+    END;
+
+    RAISE NOTICE 'Customer private-data lifecycle test passed';
 END;
 $$;
 
