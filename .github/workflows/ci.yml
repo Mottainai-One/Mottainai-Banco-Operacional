@@ -3,7 +3,11 @@ name: Database CI
 on:
   pull_request:
   push:
+    branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   validate-analytics:
     name: 0. Validar banco analitico diario
