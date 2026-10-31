@@ -44,6 +44,10 @@ psql -v ON_ERROR_STOP=1 -d mottainai_operational \
   -f database/operational/update_existing_api_rpa.sql
 ```
 
+The operational CI also runs `database/operational/39_analytics_source_contract_tests.sql`.
+It is a read-only regression check for the source columns used by the daily
+operational-to-analytics RPA; it does not alter the production schema or data.
+
 `update_existing_api_rpa.sql` runs modules 10, 20, 22, 24 and 25 in one
 transaction, then applies module 36 to align soft-deleted promotion items with
 the Spring API. It is repeatable and does not delete existing users or reset
