@@ -61,12 +61,13 @@ um data mart atualizado.
 
 ## Fatos operacionais para BI
 
-Após instalar o esquema analítico existente, execute
-`database/analytics/15_operational_kpi_facts.sql` **conectado ao banco físico
-`MOTTAINAI_ANALITICO`**. O arquivo é SQL PostgreSQL puro e pode ser aberto no
-Query Tool do pgAdmin ou executado com `psql`; é repetível e não inicia cargas.
-Em uma instalação nova, `database/analytics/install.sql` e
-`install_pgadmin.sql` já incluem a migração.
+Após instalar o esquema analítico existente, execute, nesta ordem,
+`database/analytics/15_operational_kpi_facts.sql` e
+`database/analytics/16_partition_operational_kpi_facts.sql`, **conectado ao
+banco físico `MOTTAINAI_ANALITICO`**. Os arquivos são SQL PostgreSQL puro e
+podem ser abertos no Query Tool do pgAdmin ou executados com `psql`; não iniciam
+cargas. Em uma instalação nova, `install.sql` e `install_pgadmin.sql` incluem
+as duas migrações.
 
 Ela cria fatos por linha para contagens físicas, transferências, pré-listas,
 execuções de reposição, doações e descartes, além de fatos de ciclo de vida
@@ -74,7 +75,13 @@ para alertas e ações. As views `vw_inventory_count_accuracy`,
 `vw_transfer_execution`, `vw_replenishment_fulfillment`,
 `vw_product_destinations` e `vw_alert_action_funnel` expõem indicadores
 auditáveis. As tabelas são preenchidas pela RPA `analytics/load.py` **após**
-o data load operacional; apenas executar a migração deixa os fatos vazios.
+o data load operacional; apenas executar as migrações deixa os fatos vazios.
+
+A migração 16 converte esses oito fatos em tabelas particionadas mensalmente,
+preservando os registros existentes em uma transação e mantendo uma partição
+`DEFAULT` para datas fora da janela criada. A chave primária composta inclui o
+ID de origem e a coluna de partição; por isso a RPA usa os mesmos campos no
+`ON CONFLICT`. As versões 15 e 16 ficam registradas em `schema_version`.
 
 Confira o banco selecionado e os objetos antes da primeira carga:
 
