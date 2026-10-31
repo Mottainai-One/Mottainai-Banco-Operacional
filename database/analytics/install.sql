@@ -19,3 +19,4 @@ BEGIN;
 COMMIT;
 
 \ir 15_operational_kpi_facts.sql
+\ir 16_partition_operational_kpi_facts.sql

@@ -3,7 +3,11 @@ name: Database CI
 on:
   pull_request:
   push:
+    branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   validate-analytics:
     name: 0. Validar banco analitico diario
@@ -44,6 +48,8 @@ jobs:
             -v ON_ERROR_STOP=1 -f 13_daily_batch_tests.sql
           psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
             -v ON_ERROR_STOP=1 -f 16_operational_kpi_facts_tests.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f 17_partitioned_operational_kpi_facts_tests.sql
 
   # ============================================================
   # JOB 1: Valida o schema em um PostgreSQL 15 limpo
@@ -97,6 +103,14 @@ jobs:
           PGPASSWORD: mottainai
         run: |
           psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
+
+      - name: Validar contrato de origem da carga analitica
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai \
+            -v ON_ERROR_STOP=1 -f 39_analytics_source_contract_tests.sql
 
       - name: Validar administrador gerenciado sem SUPERUSER
         env:
