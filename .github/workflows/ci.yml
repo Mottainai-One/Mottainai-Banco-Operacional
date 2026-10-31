@@ -44,6 +44,8 @@ jobs:
             -v ON_ERROR_STOP=1 -f 13_daily_batch_tests.sql
           psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
             -v ON_ERROR_STOP=1 -f 16_operational_kpi_facts_tests.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai_analytics \
+            -v ON_ERROR_STOP=1 -f 17_partitioned_operational_kpi_facts_tests.sql
 
   # ============================================================
   # JOB 1: Valida o schema em um PostgreSQL 15 limpo
