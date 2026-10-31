@@ -17,3 +17,5 @@ BEGIN;
 \ir 09_tests.sql
 \ir 13_daily_batch_tests.sql
 COMMIT;
+
+\ir 15_operational_kpi_facts.sql
