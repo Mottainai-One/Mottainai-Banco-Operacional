@@ -100,6 +100,14 @@ jobs:
         run: |
           psql -h localhost -p 5432 -U mottainai -d mottainai -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'mottainai';"
 
+      - name: Validar contrato de origem da carga analitica
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai \
+            -v ON_ERROR_STOP=1 -f 39_analytics_source_contract_tests.sql
+
       - name: Validar administrador gerenciado sem SUPERUSER
         env:
           PGPASSWORD: mottainai
