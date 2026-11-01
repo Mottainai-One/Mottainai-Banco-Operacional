@@ -45,3 +45,4 @@ COMMIT;
 \\echo 'mottainai_operational installed successfully'
 
 
+
