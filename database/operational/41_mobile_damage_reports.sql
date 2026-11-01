@@ -42,7 +42,15 @@ DROP POLICY IF EXISTS damage_report_api_insert ON mottainai.damage_report;
 CREATE POLICY damage_report_api_insert
     ON mottainai.damage_report
     FOR INSERT TO mottainai_api
-    WITH CHECK (store_id = mottainai.fn_get_current_store_id());
+    WITH CHECK (
+        store_id = mottainai.fn_get_current_store_id()
+        AND EXISTS (
+            SELECT 1
+            FROM mottainai.employee AS employee_record
+            WHERE employee_record.employee_id = damage_report.employee_id
+              AND employee_record.store_id = damage_report.store_id
+        )
+    );
 
 REVOKE ALL ON TABLE mottainai.damage_report FROM PUBLIC;
 GRANT SELECT (
