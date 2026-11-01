@@ -39,10 +39,7 @@ BEGIN;
 COMMIT;
 
 BEGIN;
-\\ir 39_customer_chat_public_read.sql
+\ir 39_customer_chat_public_read.sql
 COMMIT;
 
-\\echo 'mottainai_operational installed successfully'
-
-
-
+\echo 'mottainai_operational installed successfully'
