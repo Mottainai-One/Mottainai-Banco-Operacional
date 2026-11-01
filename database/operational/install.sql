@@ -30,7 +30,6 @@ COMMIT;
 -- POS API support includes enum changes that must be committed before use.
 -- Keep these incremental migrations outside the installation transaction.
 \ir update_existing_pos_api.sql
-\ir 36_api_soft_delete_promotion_items.sql
 
 -- Final customer security and mobile API contract are applied only after the
 -- POS compatibility migrations are committed.

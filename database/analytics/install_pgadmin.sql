@@ -2224,7 +2224,7 @@ DECLARE
 BEGIN
     BEGIN
         v_batch_id := fn_begin_daily_batch(
-            current_date - 1,
+            (now() AT TIME ZONE 'America/Sao_Paulo')::date - 1,
             NULL,
             'contract-test-transaction',
             '{"test":true}'::jsonb
@@ -2307,7 +2307,7 @@ DECLARE
 BEGIN
     BEGIN
         v_batch_id := fn_begin_daily_batch(
-            current_date - 2,
+            (now() AT TIME ZONE 'America/Sao_Paulo')::date - 2,
             NULL,
             'privacy-contract-test',
             '{"test":true}'::jsonb

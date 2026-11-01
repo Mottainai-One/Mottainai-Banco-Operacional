@@ -169,3 +169,9 @@ real. Por isso, o contexto RLS do cliente fica em
 tabela é inacessível aos logins das APIs e somente funções `SECURITY DEFINER`
 das roles técnicas de perfil ou autenticação podem gravá-la. Bootstrap e
 operação protegida devem ocorrer na mesma transação.
+
+A atualização incremental do POS também executa
+`37_pos_manager_approvals.sql`, que cria o registro durável de pedidos de
+aprovação. Cancelamentos continuam usando `pos_cancel_request` e
+`sp_decide_pos_cancellation`; os outros tipos ficam registrados em
+`pos_manager_approval_request`.
