@@ -38,4 +38,10 @@ BEGIN;
 \ir 38_client_mobile_api.sql
 COMMIT;
 
-\echo 'mottainai_operational installed successfully'
+BEGIN;
+\\ir 39_customer_chat_public_read.sql
+COMMIT;
+
+\\echo 'mottainai_operational installed successfully'
+
+
