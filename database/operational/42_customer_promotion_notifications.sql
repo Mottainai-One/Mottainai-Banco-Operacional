@@ -86,8 +86,14 @@ $preflight$;
 
 GRANT mottainai_notification_owner, mottainai_notification_worker TO CURRENT_USER;
 GRANT USAGE, CREATE ON SCHEMA mottainai TO mottainai_notification_owner;
+-- fn_get_current_customer_id is owned by the profile owner role from migration
+-- 38. Temporarily act as that owner to grant only this context lookup to the
+-- notification SECURITY DEFINER role.
+GRANT mottainai_client_profile_owner TO CURRENT_USER;
+SET ROLE mottainai_client_profile_owner;
 GRANT EXECUTE ON FUNCTION mottainai.fn_get_current_customer_id()
     TO mottainai_notification_owner;
+RESET ROLE;
 GRANT SELECT (customer_id, active, deleted_at, marketing_consent)
     ON mottainai.customer TO mottainai_notification_owner;
 GRANT SELECT (customer_id, active, points_balance)
@@ -689,7 +695,8 @@ BEGIN
                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname = CURRENT_USER
             )
           AND granted_role.rolname IN (
-              'mottainai_notification_owner', 'mottainai_notification_worker'
+              'mottainai_notification_owner', 'mottainai_notification_worker',
+              'mottainai_client_profile_owner'
           )
     LOOP
         EXECUTE format('REVOKE %I FROM CURRENT_USER', v_role_name);
