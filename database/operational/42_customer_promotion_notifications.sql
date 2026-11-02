@@ -98,10 +98,15 @@ GRANT SELECT (customer_id, active, deleted_at, marketing_consent)
     ON mottainai.customer TO mottainai_notification_owner;
 GRANT SELECT (customer_id, active, points_balance)
     ON mottainai.loyalty_account TO mottainai_notification_owner;
+-- The catalog views are owned by a separate restricted role. Grant from that
+-- owner so managed migration principals do not need ownership escalation.
+GRANT mottainai_client_catalog_owner TO CURRENT_USER;
+SET ROLE mottainai_client_catalog_owner;
 GRANT SELECT ON mottainai.api_client_catalog_stores,
     mottainai.api_client_catalog_promotions,
     mottainai.api_client_catalog_promotion_items
     TO mottainai_notification_owner;
+RESET ROLE;
 
 -- The catalog view owner must see only currently eligible offers and items.
 -- RLS is enabled (not forced) so the separately owned catalog views are
@@ -696,7 +701,8 @@ BEGIN
             )
           AND granted_role.rolname IN (
               'mottainai_notification_owner', 'mottainai_notification_worker',
-              'mottainai_client_profile_owner'
+              'mottainai_client_profile_owner',
+              'mottainai_client_catalog_owner'
           )
     LOOP
         EXECUTE format('REVOKE %I FROM CURRENT_USER', v_role_name);
