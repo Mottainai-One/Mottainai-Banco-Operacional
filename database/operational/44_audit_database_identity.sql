@@ -5,7 +5,7 @@ BEGIN;
 
 DO $guard$
 BEGIN
-    IF current_database() <> 'MOTTAINAI' THEN
+    IF upper(current_database()) <> 'MOTTAINAI' THEN
         RAISE EXCEPTION 'Connect to MOTTAINAI; current database: %', current_database();
     END IF;
     IF to_regclass('mottainai.audit_log') IS NULL
