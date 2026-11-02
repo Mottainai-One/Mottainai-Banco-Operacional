@@ -1,6 +1,7 @@
--- Exercises INSERT/UPDATE/DELETE audit identity capture in an isolated transaction.
+-- Exercises INSERT/UPDATE/DELETE audit payload and identity capture in an isolated transaction.
 \set ON_ERROR_STOP on
 BEGIN;
+SAVEPOINT audit_identity_test;
 SET LOCAL search_path TO mottainai, pg_temp, public;
 
 CREATE TEMP TABLE audit_identity_fixture (
@@ -56,7 +57,45 @@ BEGIN
     ) <> 3 THEN
         RAISE EXCEPTION 'Expected one audit row for each of INSERT, UPDATE and DELETE';
     END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mottainai.audit_log
+        WHERE table_affected = 'audit_identity_fixture'
+          AND record_id = '1'
+          AND operation::TEXT = 'INSERT'
+          AND old_data IS NULL
+          AND new_data->>'fixture_value' = 'before'
+    ) THEN
+        RAISE EXCEPTION 'INSERT audit event must contain NEW and no OLD record';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mottainai.audit_log
+        WHERE table_affected = 'audit_identity_fixture'
+          AND record_id = '1'
+          AND operation::TEXT = 'UPDATE'
+          AND old_data->>'fixture_value' = 'before'
+          AND new_data->>'fixture_value' = 'after'
+    ) THEN
+        RAISE EXCEPTION 'UPDATE audit event must preserve both OLD and NEW records';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mottainai.audit_log
+        WHERE table_affected = 'audit_identity_fixture'
+          AND record_id = '1'
+          AND operation::TEXT = 'DELETE'
+          AND old_data->>'fixture_value' = 'after'
+          AND new_data IS NULL
+    ) THEN
+        RAISE EXCEPTION 'DELETE audit event must contain OLD and no NEW record';
+    END IF;
 END
 $assert$;
 
+-- Roll back the fixture and audit rows, then close the empty outer transaction.
+ROLLBACK TO SAVEPOINT audit_identity_test;
 COMMIT;
