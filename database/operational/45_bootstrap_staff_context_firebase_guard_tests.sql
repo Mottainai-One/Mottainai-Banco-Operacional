@@ -1,7 +1,7 @@
 -- Regression coverage for the Firebase-only staff bootstrap guard.
--- Runs in a disposable CI database; no user rows or persistent context are changed.
-BEGIN;
-
+-- Each DO statement runs in its own transaction, so LOCAL session context
+-- is discarded automatically when the assertion block finishes. No user rows
+-- or persistent session context are changed.
 DO $test$
 DECLARE
     expected_user TEXT := 'bootstrap-regression-user-sentinel';
@@ -46,5 +46,3 @@ BEGIN
     RAISE NOTICE 'PASS: null, empty, unsupported and unknown bootstrap inputs fail closed without changing context';
 END;
 $test$;
-
-ROLLBACK;
