@@ -81,6 +81,16 @@ jobs:
           cd database/operational
           psql -h localhost -p 5432 -U mottainai -d mottainai -v ON_ERROR_STOP=1 -f install.sql
 
+      - name: Validar captura de identidades na auditoria
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          cd database/operational
+          psql -h localhost -p 5432 -U mottainai -d mottainai \\
+            -v ON_ERROR_STOP=1 -f update_existing_audit_database_identity.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai \\
+            -v ON_ERROR_STOP=1 -f 44_audit_database_identity_tests.sql
+
       - name: Validar reaplicacao das migrations incrementais
         env:
           PGPASSWORD: mottainai
