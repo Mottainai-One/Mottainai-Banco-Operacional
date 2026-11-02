@@ -57,6 +57,10 @@ alter tables, create sequences and manage the three group roles. Verify
 application Flyway history separately; an existing database cannot safely be
 relabeled as having applied the API's migrations.
 
+`update_existing_pos_api.sql` also applies module 39, which adds the POS
+customer lookup by CPF SHA-256 token. The API hashes the CPF before calling the
+database; PostgreSQL receives only the token and returns the customer ID.
+
 The installer also supports managed PostgreSQL administrators that have
 `CREATEROLE` but are not `SUPERUSER`. Privileged role attributes are verified
 instead of being altered by an account that cannot legally change them.
