@@ -1,6 +1,7 @@
 -- Exercises INSERT/UPDATE/DELETE audit payload and identity capture in an isolated transaction.
 \set ON_ERROR_STOP on
 BEGIN;
+SAVEPOINT audit_identity_test;
 SET LOCAL search_path TO mottainai, pg_temp, public;
 
 CREATE TEMP TABLE audit_identity_fixture (
@@ -95,5 +96,6 @@ BEGIN
 END
 $assert$;
 
--- The fixture and audit events are rolled back so the test leaves no residue.
-ROLLBACK;
+-- Roll back the fixture and audit rows, then close the empty outer transaction.
+ROLLBACK TO SAVEPOINT audit_identity_test;
+COMMIT;
