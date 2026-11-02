@@ -155,11 +155,15 @@ BEGIN
     UPDATE promotion
     SET approved_by = CASE WHEN p_approve THEN p_manager_id ELSE NULL END,
         approved_at = CASE WHEN p_approve THEN NOW() ELSE NULL END,
-        status = CASE WHEN p_approve THEN 'APPROVED' ELSE 'REJECTED' END,
+        status = (CASE WHEN p_approve THEN 'APPROVED' ELSE 'REJECTED' END)
+            ::mottainai.promotion_status,
         active = p_approve,
         updated_at = NOW()
     WHERE promotion_id = p_promotion_id
-      AND status IN ('DRAFT', 'PENDING_APPROVAL');
+      AND status IN (
+          'DRAFT'::mottainai.promotion_status,
+          'PENDING_APPROVAL'::mottainai.promotion_status
+      );
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Promoção não encontrada ou não está aguardando aprovação';
@@ -226,13 +230,14 @@ BEGIN
         RAISE EXCEPTION 'Solicitação de cancelamento não encontrada';
     END IF;
 
-    IF v_request.status <> 'PENDING' THEN
+    IF v_request.status <> 'PENDING'::mottainai.pos_cancel_status THEN
         RAISE EXCEPTION 'Solicitação de cancelamento não está pendente';
     END IF;
 
     UPDATE pos_cancel_request
     SET approved_by = p_manager_id,
-        status = CASE WHEN p_approve THEN 'APPROVED' ELSE 'REJECTED' END,
+        status = (CASE WHEN p_approve THEN 'APPROVED' ELSE 'REJECTED' END)
+            ::mottainai.pos_cancel_status,
         decided_at = NOW(),
         decision_observation = p_observation,
         updated_at = NOW()
