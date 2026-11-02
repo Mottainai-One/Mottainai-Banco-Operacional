@@ -47,5 +47,6 @@ COMMIT;
 \ir 40_mobile_product_image_url.sql
 \ir 41_mobile_damage_reports.sql
 \ir 42_customer_promotion_notifications.sql
+\ir 43_notification_customer_consent_policy.sql
 
 \echo 'mottainai_operational installed successfully'
