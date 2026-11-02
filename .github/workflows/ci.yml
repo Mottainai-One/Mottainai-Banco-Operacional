@@ -135,6 +135,21 @@ jobs:
           psql -h localhost -p 5432 -U managed_migrator -d mottainai_managed \
             -v ON_ERROR_STOP=1 -f install.sql
 
+      - name: Validar carga sintética canônica (500 produtos e reexecução)
+        env:
+          PGPASSWORD: mottainai
+        run: |
+          psql -h localhost -p 5432 -U mottainai -d mottainai \
+            -v ON_ERROR_STOP=1 -f database/operational/90_qa_modelagem_seed.sql
+          psql -h localhost -p 5432 -U mottainai -d mottainai \
+            -v ON_ERROR_STOP=1 -f database/operational/90_qa_modelagem_seed.sql
+          products=$(psql -h localhost -p 5432 -U mottainai -d mottainai -tAc \
+            "SELECT count(*) FROM mottainai.product WHERE sku LIKE 'QA-MODEL-%';")
+          echo "produtos_qa=$products"
+          if [ "$products" != "500" ]; then
+            echo "ERRO: esperado 500 produtos QA no schema canônico, encontrado '$products'"; exit 1
+          fi
+
   # ============================================================
   # JOB 2: Valida o dataLoad (artefato exclusivo de TESTE/SEED e nao
   # parte do install de producao): executado 2x (idempotencia) e com
@@ -471,3 +486,4 @@ jobs:
       - name: Encerrar contêineres descartaveis
         if: always()
         run: docker compose --env-file qa/.env -f qa/compose.yaml -f qa/compose.ia.yaml down --volumes
+
