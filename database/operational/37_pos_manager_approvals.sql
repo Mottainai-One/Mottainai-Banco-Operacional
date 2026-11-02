@@ -104,13 +104,14 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Solicitação de cancelamento não encontrada';
     END IF;
-    IF v_request.status <> 'PENDING' THEN
+    IF v_request.status <> 'PENDING'::mottainai.pos_cancel_status THEN
         RAISE EXCEPTION 'Solicitação de cancelamento não está pendente';
     END IF;
 
     UPDATE mottainai.pos_cancel_request
     SET approved_by = p_manager_id,
-        status = CASE WHEN p_approve THEN 'APPROVED' ELSE 'REJECTED' END,
+        status = (CASE WHEN p_approve THEN 'APPROVED' ELSE 'REJECTED' END)
+            ::mottainai.pos_cancel_status,
         decided_at = NOW(), decision_observation = p_observation, updated_at = NOW()
     WHERE cancel_request_id = p_cancel_request_id;
 
