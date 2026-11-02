@@ -49,5 +49,6 @@ COMMIT;
 \ir 42_customer_promotion_notifications.sql
 \ir 43_notification_customer_consent_policy.sql
 \ir 44_audit_database_identity.sql
+\ir 45_bootstrap_staff_context_firebase_guard.sql
 
 \echo 'mottainai_operational installed successfully'
