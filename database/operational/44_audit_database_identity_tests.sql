@@ -59,4 +59,4 @@ BEGIN
 END
 $assert$;
 
-ROLLBACK;
+COMMIT;
